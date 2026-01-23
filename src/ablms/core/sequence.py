@@ -47,6 +47,7 @@ class AntibodySequence:
         heavy: Heavy chain amino acid sequence, or None.
         light: Light chain amino acid sequence, or None.
         species: Species of origin for the antibody.
+        name: Optional name/identifier for the sequence.
 
     Raises:
         InvalidSequenceError: If neither heavy nor light chain is provided.
@@ -62,7 +63,7 @@ class AntibodySequence:
     # Unified mask token used internally
     MASK_TOKEN: str = "<MASK>"
 
-    __slots__ = ("heavy_chain", "light_chain", "species")
+    __slots__ = ("heavy_chain", "light_chain", "species", "name")
 
     def __init__(
         self,
@@ -70,6 +71,7 @@ class AntibodySequence:
         heavy: str | None = None,
         light: str | None = None,
         species: Species = Species.UNKNOWN,
+        name: str | None = None,
     ) -> None:
         """
         Initialize an AntibodySequence.
@@ -78,10 +80,12 @@ class AntibodySequence:
             heavy: Heavy chain amino acid sequence.
             light: Light chain amino acid sequence.
             species: Species of origin for the antibody.
+            name: Optional name/identifier for the sequence.
         """
         self.heavy_chain = heavy
         self.light_chain = light
         self.species = species
+        self.name = name
         self._validate()
 
     def _validate(self) -> None:
@@ -230,12 +234,14 @@ class AntibodySequence:
                 heavy=masked_sequence,
                 light=self.light_chain,
                 species=self.species,
+                name=self.name,
             )
         else:
             return AntibodySequence(
                 heavy=self.heavy_chain,
                 light=masked_sequence,
                 species=self.species,
+                name=self.name,
             )
 
     def get_sequence(self, chain: str) -> str | None:
@@ -258,6 +264,8 @@ class AntibodySequence:
     def __repr__(self) -> str:
         """Return a string representation."""
         parts = []
+        if self.name:
+            parts.append(f"name='{self.name}'")
         if self.heavy_chain:
             h_len = self.length.get("heavy", 0)
             parts.append(f"heavy={h_len}aa")
