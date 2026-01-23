@@ -18,7 +18,7 @@ class BALM(EncoderAbLM):
     BALM-paired is a RoBERTa-based model trained on paired antibody sequences.
     It uses </s></s> as the chain separator.
 
-    Model: BALM/BALM-paired
+    Model: brineylab/BALM-paired
 
     Attributes:
         model_name: "balm"
@@ -37,7 +37,7 @@ class BALM(EncoderAbLM):
     separator = "</s></s>"
     has_mlm_head = True
 
-    MODEL_ID = "BALM/BALM-paired"
+    MODEL_ID = "brineylab/BALM-paired"
 
     def __init__(
         self,
