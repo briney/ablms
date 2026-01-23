@@ -1,12 +1,11 @@
 """Input validation utilities."""
 
-from typing import Set
 
 from ablms.exceptions import InvalidAminoAcidError, SequenceTooLongError
 
 
 # Standard amino acid characters plus X for unknown
-VALID_AMINO_ACIDS: Set[str] = set("ACDEFGHIKLMNPQRSTVWXY")
+VALID_AMINO_ACIDS: set[str] = set("ACDEFGHIKLMNPQRSTVWXY")
 
 
 def validate_amino_acids(

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
 
 import torch
 
@@ -86,8 +85,8 @@ class IgLM(GenerativeAbLM):
         self._model = self._iglm
 
     def _format_for_model(
-        self, sequences: List[AntibodySequence]
-    ) -> List[str]:
+        self, sequences: list[AntibodySequence]
+    ) -> list[str]:
         """Format sequences for IgLM (returns raw sequences)."""
         formatted = []
         for seq in sequences:
@@ -96,8 +95,8 @@ class IgLM(GenerativeAbLM):
         return formatted
 
     def _tokenize(
-        self, formatted_sequences: List[str]
-    ) -> Dict[str, torch.Tensor]:
+        self, formatted_sequences: list[str]
+    ) -> dict[str, torch.Tensor]:
         """Tokenize is handled internally by IgLM."""
         return {"sequences": formatted_sequences}
 
@@ -112,7 +111,7 @@ class IgLM(GenerativeAbLM):
         top_p: float | None,
         max_length: int | None,
         **kwargs,
-    ) -> Tuple[List[AntibodySequence], List[float]]:
+    ) -> tuple[list[AntibodySequence], list[float]]:
         """Generate new antibody sequences using IgLM."""
         # Map enums to IgLM parameters
         iglm_chain = CHAIN_TYPE_MAP.get(chain_type, "heavy")
@@ -153,13 +152,13 @@ class IgLM(GenerativeAbLM):
     def _infill(
         self,
         sequence: AntibodySequence,
-        mask_range: Tuple[int, int] | None,
+        mask_range: tuple[int, int] | None,
         num_sequences: int,
         chain_type: ChainType,
         species: Species,
         temperature: float,
         **kwargs,
-    ) -> Tuple[List[AntibodySequence], List[float]]:
+    ) -> tuple[list[AntibodySequence], list[float]]:
         """Infill masked regions in a sequence."""
         # Get the sequence string
         seq_str = sequence.heavy_chain or sequence.light_chain

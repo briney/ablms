@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import Dict, List, Tuple
 
 import torch
 
@@ -84,7 +83,7 @@ class GenerativeAbLM(BaseAbLM):
     def infill(
         self,
         sequence: str | AntibodySequence,
-        mask_range: Tuple[int, int] | None = None,
+        mask_range: tuple[int, int] | None = None,
         num_sequences: int = 1,
         chain_type: ChainType = ChainType.HEAVY,
         species: Species = Species.HUMAN,
@@ -140,10 +139,10 @@ class GenerativeAbLM(BaseAbLM):
 
     def log_likelihood(
         self,
-        sequences: str | AntibodySequence | List[str] | List[AntibodySequence],
+        sequences: str | AntibodySequence | list[str] | list[AntibodySequence],
         chain_type: ChainType = ChainType.HEAVY,
         species: Species = Species.HUMAN,
-    ) -> List[float]:
+    ) -> list[float]:
         """
         Compute log-likelihood scores for sequences.
 
@@ -178,7 +177,7 @@ class GenerativeAbLM(BaseAbLM):
         top_p: float | None,
         max_length: int | None,
         **kwargs,
-    ) -> Tuple[List[AntibodySequence], List[float]]:
+    ) -> tuple[list[AntibodySequence], list[float]]:
         """
         Internal generation method.
 
@@ -202,13 +201,13 @@ class GenerativeAbLM(BaseAbLM):
     def _infill(
         self,
         sequence: AntibodySequence,
-        mask_range: Tuple[int, int] | None,
+        mask_range: tuple[int, int] | None,
         num_sequences: int,
         chain_type: ChainType,
         species: Species,
         temperature: float,
         **kwargs,
-    ) -> Tuple[List[AntibodySequence], List[float]]:
+    ) -> tuple[list[AntibodySequence], list[float]]:
         """
         Internal infill method.
 

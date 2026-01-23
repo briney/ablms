@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 from enum import Enum
-from typing import Dict, List, Tuple
 
 from ablms.exceptions import InvalidAminoAcidError, InvalidSequenceError
 
@@ -129,7 +128,7 @@ class AntibodySequence:
         return False
 
     @property
-    def masked_positions(self) -> Dict[str, List[int]]:
+    def masked_positions(self) -> dict[str, list[int]]:
         """
         Get positions of mask tokens in each chain.
 
@@ -160,7 +159,7 @@ class AntibodySequence:
         return positions
 
     @property
-    def length(self) -> Dict[str, int]:
+    def length(self) -> dict[str, int]:
         """
         Get the length of each chain (mask tokens count as 1).
 
@@ -186,7 +185,7 @@ class AntibodySequence:
         return sum(self.length.values())
 
     def with_mask(
-        self, chain: str, positions: List[int]
+        self, chain: str, positions: list[int]
     ) -> AntibodySequence:
         """
         Create a new AntibodySequence with mask tokens at specified positions.

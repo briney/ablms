@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ablms.core.sequence import AntibodySequence, ChainType, Species
@@ -20,9 +20,9 @@ class GenerationOutput:
         generation_params: Dictionary of parameters used for generation.
     """
 
-    sequences: List[AntibodySequence]
-    scores: List[float] | None = None
-    generation_params: Dict[str, Any] = field(default_factory=dict)
+    sequences: list[AntibodySequence]
+    scores: list[float] | None = None
+    generation_params: dict[str, Any] = field(default_factory=dict)
 
     @property
     def num_sequences(self) -> int:

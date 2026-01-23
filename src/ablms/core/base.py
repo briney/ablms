@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import warnings
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 
 import torch
 
@@ -50,7 +50,7 @@ class BaseAbLM(ABC):
     def __init__(
         self,
         device: str | torch.device | None = None,
-        devices: str | int | List[int | str] | torch.device | List[torch.device] | None = None,
+        devices: str | int | list[int | str] | torch.device | list[torch.device] | None = None,
     ) -> None:
         """
         Initialize the base model.
@@ -89,7 +89,7 @@ class BaseAbLM(ABC):
         return self._primary_device
 
     @property
-    def devices(self) -> List[torch.device]:
+    def devices(self) -> list[torch.device]:
         """Get all devices used by this model."""
         return self._devices.copy()
 
@@ -151,7 +151,7 @@ class BaseAbLM(ABC):
             )
         return self._executor
 
-    def _get_init_kwargs(self) -> Dict[str, Any]:
+    def _get_init_kwargs(self) -> dict[str, Any]:
         """
         Get the kwargs needed to reconstruct this model in a worker.
 
@@ -165,8 +165,8 @@ class BaseAbLM(ABC):
 
     def _normalize_input(
         self,
-        sequences: str | AntibodySequence | List[str] | List[AntibodySequence],
-    ) -> List[AntibodySequence]:
+        sequences: str | AntibodySequence | list[str] | list[AntibodySequence],
+    ) -> list[AntibodySequence]:
         """
         Normalize input to a list of AntibodySequence objects.
 
@@ -203,7 +203,7 @@ class BaseAbLM(ABC):
         )
 
     def _validate_input(
-        self, sequences: List[AntibodySequence]
+        self, sequences: list[AntibodySequence]
     ) -> None:
         """
         Validate input sequences for this model.
@@ -238,8 +238,8 @@ class BaseAbLM(ABC):
 
     @abstractmethod
     def _format_for_model(
-        self, sequences: List[AntibodySequence]
-    ) -> List[str]:
+        self, sequences: list[AntibodySequence]
+    ) -> list[str]:
         """
         Format sequences for model-specific tokenization.
 
@@ -256,8 +256,8 @@ class BaseAbLM(ABC):
 
     @abstractmethod
     def _tokenize(
-        self, formatted_sequences: List[str]
-    ) -> Dict[str, torch.Tensor]:
+        self, formatted_sequences: list[str]
+    ) -> dict[str, torch.Tensor]:
         """
         Tokenize formatted sequences.
 
@@ -271,9 +271,9 @@ class BaseAbLM(ABC):
 
     def _compute_token_offsets(
         self,
-        sequences: List[AntibodySequence],
-        tokenized: Dict[str, torch.Tensor],
-    ) -> List[Dict[str, Tuple[int, int]]]:
+        sequences: list[AntibodySequence],
+        tokenized: dict[str, torch.Tensor],
+    ) -> list[dict[str, tuple[int, int]]]:
         """
         Compute token offsets for each chain in the tokenized sequences.
 

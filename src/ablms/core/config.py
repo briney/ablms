@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, Type
+from typing import Any
 
 import torch
 
@@ -30,7 +30,7 @@ class ModelConfig:
     """
 
     name: str
-    model_class: Type
+    model_class: type
     model_id: str
     supports_paired: bool = False
     max_length: int = 512
@@ -39,11 +39,11 @@ class ModelConfig:
     separator: str | None = None
     has_mlm_head: bool = True
     model_type: str = "encoder"
-    extra_kwargs: Dict[str, Any] = field(default_factory=dict)
+    extra_kwargs: dict[str, Any] = field(default_factory=dict)
 
 
 # Global model registry
-MODEL_REGISTRY: Dict[str, ModelConfig] = {}
+MODEL_REGISTRY: dict[str, ModelConfig] = {}
 
 
 def register_model(config: ModelConfig) -> None:
@@ -77,7 +77,7 @@ def get_model_config(name: str) -> ModelConfig:
     return MODEL_REGISTRY[name]
 
 
-def list_models() -> Dict[str, str]:
+def list_models() -> dict[str, str]:
     """
     List all registered models.
 

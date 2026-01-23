@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import traceback
-from typing import Any, Dict, List, Tuple, Type, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 import torch
 import torch.multiprocessing as mp
@@ -15,8 +15,8 @@ if TYPE_CHECKING:
 def worker_main(
     worker_id: int,
     device: torch.device,
-    model_class: Type[BaseAbLM],
-    model_init_kwargs: Dict[str, Any],
+    model_class: type[BaseAbLM],
+    model_init_kwargs: dict[str, Any],
     task_queue: mp.Queue,
     result_queue: mp.Queue,
 ) -> None:
@@ -91,8 +91,8 @@ def worker_main(
 def _execute_task(
     model: BaseAbLM,
     method_name: str,
-    sequences: List[Any],
-    kwargs: Dict[str, Any],
+    sequences: list[Any],
+    kwargs: dict[str, Any],
 ) -> Any:
     """
     Execute a single batch task on the model.
@@ -122,8 +122,8 @@ class WorkerHandle:
         self,
         worker_id: int,
         device: torch.device,
-        model_class: Type[BaseAbLM],
-        model_init_kwargs: Dict[str, Any],
+        model_class: type[BaseAbLM],
+        model_init_kwargs: dict[str, Any],
         task_queue: mp.Queue,
         result_queue: mp.Queue,
         process: mp.Process,
@@ -142,8 +142,8 @@ class WorkerHandle:
         cls,
         worker_id: int,
         device: torch.device,
-        model_class: Type[BaseAbLM],
-        model_init_kwargs: Dict[str, Any],
+        model_class: type[BaseAbLM],
+        model_init_kwargs: dict[str, Any],
         result_queue: mp.Queue,
         ctx: mp.context.SpawnContext,
     ) -> WorkerHandle:
@@ -191,8 +191,8 @@ class WorkerHandle:
         self,
         task_id: int,
         method_name: str,
-        sequences: List[Any],
-        kwargs: Dict[str, Any],
+        sequences: list[Any],
+        kwargs: dict[str, Any],
     ) -> None:
         """Submit a task to this worker."""
         self.task_queue.put((task_id, method_name, sequences, kwargs))

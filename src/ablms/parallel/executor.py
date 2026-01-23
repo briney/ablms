@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Dict, List, Optional, Tuple, Type, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 
 import torch
 import torch.multiprocessing as mp
@@ -44,9 +44,9 @@ class MultiGPUExecutor:
 
     def __init__(
         self,
-        model_class: Type[BaseAbLM],
-        model_init_kwargs: Dict[str, Any],
-        devices: List[torch.device],
+        model_class: type[BaseAbLM],
+        model_init_kwargs: dict[str, Any],
+        devices: list[torch.device],
     ):
         """
         Initialize executor (does NOT spawn workers yet).
@@ -62,7 +62,7 @@ class MultiGPUExecutor:
         self._is_single_device = len(devices) == 1
 
         # Worker management (initialized lazily)
-        self._workers: Optional[List[WorkerHandle]] = None
+        self._workers: Optional[list[WorkerHandle]] = None
         self._result_queue: Optional[mp.Queue] = None
         self._mp_context: Optional[mp.context.SpawnContext] = None
 
@@ -145,7 +145,7 @@ class MultiGPUExecutor:
     def execute(
         self,
         method_name: str,
-        sequences: List[AntibodySequence],
+        sequences: list[AntibodySequence],
         batch_size: int,
         show_progress: bool = True,
         progress_desc: Optional[str] = None,
@@ -189,7 +189,7 @@ class MultiGPUExecutor:
     def _execute_single(
         self,
         method_name: str,
-        sequences: List[AntibodySequence],
+        sequences: list[AntibodySequence],
         batch_size: int,
         show_progress: bool,
         progress_desc: Optional[str],
@@ -226,7 +226,7 @@ class MultiGPUExecutor:
     def _execute_multi(
         self,
         method_name: str,
-        sequences: List[AntibodySequence],
+        sequences: list[AntibodySequence],
         batch_size: int,
         show_progress: bool,
         progress_desc: Optional[str],
@@ -302,9 +302,9 @@ class MultiGPUExecutor:
 
     def _distribute_work(
         self,
-        sequences: List[AntibodySequence],
+        sequences: list[AntibodySequence],
         batch_size: int,
-    ) -> List[List[Tuple[int, List[AntibodySequence]]]]:
+    ) -> list[list[tuple[int, list[AntibodySequence]]]]:
         """
         Distribute sequences across workers using round-robin.
 
@@ -326,7 +326,7 @@ class MultiGPUExecutor:
             batches.append((batch_idx, batch))
 
         # Round-robin distribution
-        worker_assignments: List[List[Tuple[int, List[AntibodySequence]]]] = [
+        worker_assignments: list[list[tuple[int, list[AntibodySequence]]]] = [
             [] for _ in range(num_workers)
         ]
 
@@ -336,7 +336,7 @@ class MultiGPUExecutor:
 
         return worker_assignments
 
-    def _combine_results(self, results: List[Any]) -> Any:
+    def _combine_results(self, results: list[Any]) -> Any:
         """
         Combine results from multiple batches.
 
@@ -376,8 +376,8 @@ class MultiGPUExecutor:
         return results
 
     def _combine_tuple_results(
-        self, results: List[Tuple[Any, ...]]
-    ) -> Tuple[Any, ...]:
+        self, results: list[tuple[Any, ...]]
+    ) -> tuple[Any, ...]:
         """Combine tuple results element-wise."""
         num_elements = len(results[0])
         combined = []

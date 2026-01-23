@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
 
 import torch
 import torch.nn.functional as F
@@ -67,8 +66,8 @@ class FtESM(EncoderAbLM):
         self._model.eval()
 
     def _format_for_model(
-        self, sequences: List[AntibodySequence]
-    ) -> List[str]:
+        self, sequences: list[AntibodySequence]
+    ) -> list[str]:
         """
         Format sequences for ft-ESM tokenization.
 
@@ -98,8 +97,8 @@ class FtESM(EncoderAbLM):
         return formatted
 
     def _tokenize(
-        self, formatted_sequences: List[str]
-    ) -> Dict[str, torch.Tensor]:
+        self, formatted_sequences: list[str]
+    ) -> dict[str, torch.Tensor]:
         """Tokenize formatted sequences."""
         encoded = self._tokenizer(
             formatted_sequences,
@@ -112,9 +111,9 @@ class FtESM(EncoderAbLM):
 
     def _compute_token_offsets(
         self,
-        sequences: List[AntibodySequence],
-        tokenized: Dict[str, torch.Tensor],
-    ) -> List[Dict[str, Tuple[int, int]]]:
+        sequences: list[AntibodySequence],
+        tokenized: dict[str, torch.Tensor],
+    ) -> list[dict[str, tuple[int, int]]]:
         """
         Compute token offsets for each chain.
 
@@ -166,9 +165,9 @@ class FtESM(EncoderAbLM):
 
     def _forward_embeddings(
         self,
-        tokenized: Dict[str, torch.Tensor],
+        tokenized: dict[str, torch.Tensor],
         layer: int = -1,
-    ) -> Tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Forward pass to get embeddings from a specific layer."""
         with torch.no_grad():
             outputs = self._model.esm(
@@ -184,8 +183,8 @@ class FtESM(EncoderAbLM):
 
     def _forward_all_hidden_states(
         self,
-        tokenized: Dict[str, torch.Tensor],
-    ) -> Tuple[List[torch.Tensor], torch.Tensor | None]:
+        tokenized: dict[str, torch.Tensor],
+    ) -> tuple[list[torch.Tensor], torch.Tensor | None]:
         """Forward pass to get all hidden states."""
         with torch.no_grad():
             outputs = self._model.esm(
@@ -200,8 +199,8 @@ class FtESM(EncoderAbLM):
 
     def _forward_attention(
         self,
-        tokenized: Dict[str, torch.Tensor],
-    ) -> Tuple[torch.Tensor, torch.Tensor | None]:
+        tokenized: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Forward pass to get attention weights."""
         with torch.no_grad():
             outputs = self._model.esm(
@@ -216,8 +215,8 @@ class FtESM(EncoderAbLM):
 
     def _forward_logits(
         self,
-        tokenized: Dict[str, torch.Tensor],
-    ) -> Tuple[torch.Tensor, torch.Tensor | None]:
+        tokenized: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Forward pass to get MLM logits."""
         with torch.no_grad():
             outputs = self._model(**tokenized)
@@ -227,7 +226,7 @@ class FtESM(EncoderAbLM):
 
         return logits, attention_mask
 
-    def _get_vocab(self) -> Dict[str, int]:
+    def _get_vocab(self) -> dict[str, int]:
         """Get the vocabulary mapping."""
         return self._tokenizer.get_vocab()
 
@@ -264,9 +263,9 @@ class FtESM(EncoderAbLM):
 
     def _fill_mask_batch(
         self,
-        sequences: List[AntibodySequence],
+        sequences: list[AntibodySequence],
         top_k: int,
-    ) -> List[List[AntibodySequence]]:
+    ) -> list[list[AntibodySequence]]:
         """Fill masks for a batch of sequences."""
         results = []
 

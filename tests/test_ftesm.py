@@ -185,7 +185,7 @@ class TestFtESMEmbeddings:
 
         assert output.embeddings.ndim == 3
         assert output.embeddings.shape[0] == 1
-        assert output.embeddings.shape[2] == 1024
+        assert output.embeddings.shape[2] == 1280  # embedding dim
 
     @pytest.mark.slow
     def test_embeddings_batch(self):

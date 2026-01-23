@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 import torch
 import torch.nn.functional as F
@@ -28,9 +28,9 @@ class LogitsOutput:
 
     logits: torch.Tensor
     attention_mask: torch.Tensor | None = None
-    token_offsets: List[Dict[str, Tuple[int, int]]] | None = None
-    vocab: Dict[str, int] | None = field(default=None, repr=False)
-    sequences: List[AntibodySequence] | None = field(default=None, repr=False)
+    token_offsets: list[dict[str, tuple[int, int]]] | None = None
+    vocab: dict[str, int] | None = field(default=None, repr=False)
+    sequences: list[AntibodySequence] | None = field(default=None, repr=False)
 
     @property
     def shape(self) -> torch.Size:
@@ -78,7 +78,7 @@ class LogitsOutput:
         return self.logits.argmax(dim=-1)
 
     @property
-    def predicted_tokens(self) -> List[List[str]] | None:
+    def predicted_tokens(self) -> list[list[str]] | None:
         """
         Get predicted tokens as strings.
 
@@ -101,7 +101,7 @@ class LogitsOutput:
 
     def top_k_predictions(
         self, k: int = 5
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Get top-k predictions for each position.
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-from typing import List
 
 import torch
 
@@ -17,8 +16,8 @@ WORKER_TIMEOUT = int(os.environ.get("ABLMS_WORKER_TIMEOUT", 300))
 
 
 def resolve_devices(
-    devices: str | int | List[int | str] | torch.device | List[torch.device] | None,
-) -> List[torch.device]:
+    devices: str | int | list[int | str] | torch.device | list[torch.device] | None,
+) -> list[torch.device]:
     """
     Resolve device specification to a list of torch.device objects.
 
@@ -113,7 +112,7 @@ def resolve_single_device(device: str | int | torch.device) -> torch.device:
     return device
 
 
-def _auto_detect_devices() -> List[torch.device]:
+def _auto_detect_devices() -> list[torch.device]:
     """
     Auto-detect all available GPU devices.
 
@@ -145,7 +144,7 @@ def _auto_detect_single_device() -> torch.device:
         return torch.device("cpu")
 
 
-def get_device_info(devices: List[torch.device]) -> str:
+def get_device_info(devices: list[torch.device]) -> str:
     """
     Get a human-readable string describing the devices.
 

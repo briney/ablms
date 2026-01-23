@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 import torch
 
@@ -30,9 +30,9 @@ class EmbeddingOutput:
 
     embeddings: torch.Tensor
     attention_mask: torch.Tensor | None = None
-    token_offsets: List[Dict[str, Tuple[int, int]]] | None = None
+    token_offsets: list[dict[str, tuple[int, int]]] | None = None
     pooled: torch.Tensor | None = None
-    sequences: List[AntibodySequence] | None = field(default=None, repr=False)
+    sequences: list[AntibodySequence] | None = field(default=None, repr=False)
     layer: int = -1
 
     @property

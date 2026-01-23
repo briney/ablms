@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import Any, Dict, List, Tuple
+from typing import Any
 
 import torch
 
@@ -31,7 +31,7 @@ class EncoderAbLM(BaseAbLM):
 
     def get_embeddings(
         self,
-        sequences: str | AntibodySequence | List[str] | List[AntibodySequence],
+        sequences: str | AntibodySequence | list[str] | list[AntibodySequence],
         layer: int = -1,
         batch_size: int = 32,
         show_progress: bool = True,
@@ -81,9 +81,9 @@ class EncoderAbLM(BaseAbLM):
 
     def _process_embeddings_batch(
         self,
-        sequences: List[AntibodySequence],
+        sequences: list[AntibodySequence],
         layer: int = -1,
-    ) -> Tuple[torch.Tensor, torch.Tensor | None, List[Dict[str, Tuple[int, int]]]]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None, list[dict[str, tuple[int, int]]]]:
         """
         Process a single batch of sequences for embeddings.
 
@@ -110,7 +110,7 @@ class EncoderAbLM(BaseAbLM):
 
     def get_sequence_embeddings(
         self,
-        sequences: str | AntibodySequence | List[str] | List[AntibodySequence],
+        sequences: str | AntibodySequence | list[str] | list[AntibodySequence],
         pooling: str = "mean",
         layer: int = -1,
         batch_size: int = 32,
@@ -153,10 +153,10 @@ class EncoderAbLM(BaseAbLM):
 
     def get_hidden_states(
         self,
-        sequences: str | AntibodySequence | List[str] | List[AntibodySequence],
+        sequences: str | AntibodySequence | list[str] | list[AntibodySequence],
         batch_size: int = 32,
         show_progress: bool = True,
-    ) -> List[EmbeddingOutput]:
+    ) -> list[EmbeddingOutput]:
         """
         Get embeddings from all layers.
 
@@ -200,8 +200,8 @@ class EncoderAbLM(BaseAbLM):
 
     def _process_hidden_states_batch(
         self,
-        sequences: List[AntibodySequence],
-    ) -> Tuple[List[torch.Tensor], torch.Tensor | None, List[Dict[str, Tuple[int, int]]]]:
+        sequences: list[AntibodySequence],
+    ) -> tuple[list[torch.Tensor], torch.Tensor | None, list[dict[str, tuple[int, int]]]]:
         """
         Process a single batch for hidden states from all layers.
 
@@ -225,7 +225,7 @@ class EncoderAbLM(BaseAbLM):
 
     def get_attention(
         self,
-        sequences: str | AntibodySequence | List[str] | List[AntibodySequence],
+        sequences: str | AntibodySequence | list[str] | list[AntibodySequence],
         batch_size: int = 32,
         show_progress: bool = True,
     ) -> AttentionOutput:
@@ -270,8 +270,8 @@ class EncoderAbLM(BaseAbLM):
 
     def _process_attention_batch(
         self,
-        sequences: List[AntibodySequence],
-    ) -> Tuple[torch.Tensor, torch.Tensor | None, List[Dict[str, Tuple[int, int]]]]:
+        sequences: list[AntibodySequence],
+    ) -> tuple[torch.Tensor, torch.Tensor | None, list[dict[str, tuple[int, int]]]]:
         """
         Process a single batch for attention weights.
 
@@ -295,7 +295,7 @@ class EncoderAbLM(BaseAbLM):
 
     def get_logits(
         self,
-        sequences: str | AntibodySequence | List[str] | List[AntibodySequence],
+        sequences: str | AntibodySequence | list[str] | list[AntibodySequence],
         batch_size: int = 32,
         show_progress: bool = True,
     ) -> LogitsOutput:
@@ -350,8 +350,8 @@ class EncoderAbLM(BaseAbLM):
 
     def _process_logits_batch(
         self,
-        sequences: List[AntibodySequence],
-    ) -> Tuple[torch.Tensor, torch.Tensor | None, List[Dict[str, Tuple[int, int]]]]:
+        sequences: list[AntibodySequence],
+    ) -> tuple[torch.Tensor, torch.Tensor | None, list[dict[str, tuple[int, int]]]]:
         """
         Process a single batch for MLM logits.
 
@@ -375,10 +375,10 @@ class EncoderAbLM(BaseAbLM):
 
     def pseudo_log_likelihood(
         self,
-        sequences: str | AntibodySequence | List[str] | List[AntibodySequence],
+        sequences: str | AntibodySequence | list[str] | list[AntibodySequence],
         batch_size: int = 32,
         show_progress: bool = True,
-    ) -> List[float]:
+    ) -> list[float]:
         """
         Compute pseudo log-likelihood scores for sequences.
 
@@ -421,8 +421,8 @@ class EncoderAbLM(BaseAbLM):
 
     def _process_pseudo_ll_batch(
         self,
-        sequences: List[AntibodySequence],
-    ) -> List[float]:
+        sequences: list[AntibodySequence],
+    ) -> list[float]:
         """
         Process a batch of sequences for pseudo log-likelihood.
 
@@ -440,11 +440,11 @@ class EncoderAbLM(BaseAbLM):
 
     def fill_mask(
         self,
-        sequences: str | AntibodySequence | List[str] | List[AntibodySequence],
+        sequences: str | AntibodySequence | list[str] | list[AntibodySequence],
         top_k: int = 1,
         batch_size: int = 32,
         show_progress: bool = True,
-    ) -> List[List[AntibodySequence]]:
+    ) -> list[list[AntibodySequence]]:
         """
         Fill masked positions in sequences.
 
@@ -487,9 +487,9 @@ class EncoderAbLM(BaseAbLM):
 
     def _process_fill_mask_batch(
         self,
-        sequences: List[AntibodySequence],
+        sequences: list[AntibodySequence],
         top_k: int = 1,
-    ) -> List[List[AntibodySequence]]:
+    ) -> list[list[AntibodySequence]]:
         """
         Process a batch for mask filling.
 
@@ -507,9 +507,9 @@ class EncoderAbLM(BaseAbLM):
     @abstractmethod
     def _forward_embeddings(
         self,
-        tokenized: Dict[str, torch.Tensor],
+        tokenized: dict[str, torch.Tensor],
         layer: int = -1,
-    ) -> Tuple[torch.Tensor, torch.Tensor | None]:
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """
         Forward pass to get embeddings from a specific layer.
 
@@ -525,8 +525,8 @@ class EncoderAbLM(BaseAbLM):
     @abstractmethod
     def _forward_all_hidden_states(
         self,
-        tokenized: Dict[str, torch.Tensor],
-    ) -> Tuple[List[torch.Tensor], torch.Tensor | None]:
+        tokenized: dict[str, torch.Tensor],
+    ) -> tuple[list[torch.Tensor], torch.Tensor | None]:
         """
         Forward pass to get hidden states from all layers.
 
@@ -541,8 +541,8 @@ class EncoderAbLM(BaseAbLM):
     @abstractmethod
     def _forward_attention(
         self,
-        tokenized: Dict[str, torch.Tensor],
-    ) -> Tuple[torch.Tensor, torch.Tensor | None]:
+        tokenized: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """
         Forward pass to get attention weights.
 
@@ -557,8 +557,8 @@ class EncoderAbLM(BaseAbLM):
     @abstractmethod
     def _forward_logits(
         self,
-        tokenized: Dict[str, torch.Tensor],
-    ) -> Tuple[torch.Tensor, torch.Tensor | None]:
+        tokenized: dict[str, torch.Tensor],
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """
         Forward pass to get MLM logits.
 
@@ -571,7 +571,7 @@ class EncoderAbLM(BaseAbLM):
         pass
 
     @abstractmethod
-    def _get_vocab(self) -> Dict[str, int]:
+    def _get_vocab(self) -> dict[str, int]:
         """Get the vocabulary mapping."""
         pass
 
@@ -583,8 +583,8 @@ class EncoderAbLM(BaseAbLM):
     @abstractmethod
     def _fill_mask_batch(
         self,
-        sequences: List[AntibodySequence],
+        sequences: list[AntibodySequence],
         top_k: int,
-    ) -> List[List[AntibodySequence]]:
+    ) -> list[list[AntibodySequence]]:
         """Fill masks for a batch of sequences."""
         pass
