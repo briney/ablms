@@ -205,6 +205,80 @@ ll_scores = generator.log_likelihood(
 )
 ```
 
+### Mask Scanning
+
+Analyze model predictions at every position by masking each residue one at a time:
+
+```python
+from ablms import load_model, AntibodySequence
+
+model = load_model("igbert")
+seq = AntibodySequence(
+    heavy="EVQLVESGGGLVQPGRSLRL",
+    light="DIQMTQSPSSLSASVGDRVT"
+)
+
+# Scan all positions
+output = model.mask_scan(seq)
+
+# Basic metrics
+print(output.accuracy(agg="mean"))     # Mean prediction accuracy
+print(output.perplexity(agg="mean"))   # Mean perplexity
+print(output.entropy(agg="mean"))      # Mean entropy
+
+# Per-position values (no aggregation)
+accuracy_per_pos = output.accuracy()   # Tensor of shape [seq_len]
+```
+
+#### Chain-Specific Metrics
+
+Extract metrics for individual chains:
+
+```python
+# Get accuracy for each chain
+heavy_acc = output.get_chain_accuracy("heavy", agg="mean")
+light_acc = output.get_chain_accuracy("light", agg="mean")
+
+# Same for perplexity and entropy
+heavy_ppl = output.get_chain_perplexity("heavy", agg="mean")
+light_ent = output.get_chain_entropy("light", agg="mean")
+```
+
+#### Custom Position Masking
+
+Focus metrics on specific positions (e.g., CDR regions) using boolean masks:
+
+```python
+import torch
+
+# Build a mask from chain-specific masks
+# True = include position, False = exclude position
+heavy_cdr_mask = torch.zeros(20, dtype=torch.bool)
+heavy_cdr_mask[5:12] = True  # Only include positions 5-11
+
+# Create full-sequence mask from chain masks
+mask = output.build_mask(heavy=heavy_cdr_mask)  # light chain defaults to all True
+
+# Compute metrics only for masked positions
+cdr_accuracy = output.accuracy(mask=mask, agg="mean")
+cdr_perplexity = output.perplexity(mask=mask, agg="mean")
+
+# Or use chain-specific methods directly with chain-length masks
+heavy_cdr_acc = output.get_chain_accuracy("heavy", mask=heavy_cdr_mask, agg="mean")
+```
+
+#### Additional Properties
+
+```python
+# Raw predictions
+print(output.predictions)        # Predicted token indices
+print(output.predicted_tokens)   # Predicted tokens as strings (if vocab available)
+print(output.probabilities)      # Softmax probabilities [seq_len, vocab_size]
+
+# Top-k predictions at each position
+values, indices = output.top_k_predictions(k=5)
+```
+
 ## Key Concepts
 
 ### Unified Mask Token
@@ -231,6 +305,7 @@ All methods return structured output objects with helpful properties:
 - **`LogitsOutput`**: MLM logits with `probabilities`, `predictions`, and `top_k_predictions()`
 - **`AttentionOutput`**: Attention weights with `get_layer()`, `get_head()`, and `get_mean_attention()`
 - **`GenerationOutput`**: Generated sequences with `get_top_k()` and `filter_by_score()`
+- **`MaskScanOutput`**: Per-position predictions with `accuracy()`, `perplexity()`, `entropy()`, and `build_mask()` for custom position filtering
 
 ### Device Management
 
