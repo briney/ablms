@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from ablms.core.encoder import EncoderAbLM
 from ablms.core.sequence import AntibodySequence
 from ablms.exceptions import ModelLoadError
+from ablms.outputs import MaskScanOutput
 
 
 class AntiBERTy(EncoderAbLM):
@@ -289,3 +290,52 @@ class AntiBERTy(EncoderAbLM):
                 return AntibodySequence(light=sequence, species=original.species)
         except Exception:
             return None
+
+    def _mask_scan_batch(
+        self,
+        sequences: list[AntibodySequence],
+    ) -> list[MaskScanOutput]:
+        """Scan each position by masking it and collecting predictions."""
+        results = []
+        mask_token_id = self._tokenizer.convert_tokens_to_ids(self.mask_token)
+
+        for seq in sequences:
+            formatted = self._format_for_model([seq])[0]
+            tokens = self._tokenizer.encode(formatted, add_special_tokens=True)
+
+            seq_len = len(tokens)
+            vocab_size = self._model.config.vocab_size
+            logits = torch.zeros(seq_len, vocab_size, device=self._primary_device)
+            mask = torch.zeros(seq_len, dtype=torch.bool, device=self._primary_device)
+
+            for i in range(1, seq_len - 1):  # Skip [CLS] and [SEP]
+                masked_tokens = tokens.copy()
+                masked_tokens[i] = mask_token_id
+
+                inputs = {
+                    "input_ids": torch.tensor([masked_tokens], device=self._primary_device),
+                    "attention_mask": torch.ones(1, seq_len, device=self._primary_device),
+                }
+
+                with torch.no_grad():
+                    outputs = self._model(**inputs)
+                    output_logits = outputs.logits if hasattr(outputs, "logits") else outputs[0]
+                    logits[i] = output_logits[0, i]
+                mask[i] = True
+
+            # Compute token offsets for this single sequence
+            tokenized = {"input_ids": torch.tensor([tokens], device=self._primary_device)}
+            offsets = self._compute_token_offsets([seq], tokenized)[0]
+
+            results.append(
+                MaskScanOutput(
+                    logits=logits.cpu(),
+                    original_token_ids=torch.tensor(tokens, device="cpu"),
+                    attention_mask=mask.cpu(),
+                    vocab=self._get_vocab(),
+                    sequence=seq,
+                    token_offsets=offsets,
+                )
+            )
+
+        return results

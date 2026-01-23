@@ -37,6 +37,7 @@ from ablms.outputs import (
     LogitsOutput,
     AttentionOutput,
     GenerationOutput,
+    MaskScanOutput,
 )
 
 # Configuration and loading
@@ -93,6 +94,7 @@ __all__ = [
     "LogitsOutput",
     "AttentionOutput",
     "GenerationOutput",
+    "MaskScanOutput",
     # Configuration
     "ModelConfig",
     "load_model",

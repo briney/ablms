@@ -9,6 +9,7 @@ from transformers import T5EncoderModel, T5Tokenizer
 from ablms.core.encoder import EncoderAbLM
 from ablms.core.sequence import AntibodySequence
 from ablms.exceptions import UnsupportedOperationError
+from ablms.outputs import MaskScanOutput
 
 
 class IgT5(EncoderAbLM):
@@ -226,4 +227,14 @@ class IgT5(EncoderAbLM):
         raise UnsupportedOperationError(
             "IgT5 does not have a masked language modeling head and "
             "cannot fill masks."
+        )
+
+    def _mask_scan_batch(
+        self,
+        sequences: list[AntibodySequence],
+    ) -> list[MaskScanOutput]:
+        """IgT5 does not support mask scanning."""
+        raise UnsupportedOperationError(
+            "IgT5 does not have a masked language modeling head and "
+            "cannot perform mask scanning."
         )

@@ -9,6 +9,7 @@ import torch.nn.functional as F
 from ablms.core.encoder import EncoderAbLM
 from ablms.core.sequence import AntibodySequence
 from ablms.exceptions import ModelLoadError
+from ablms.outputs import MaskScanOutput
 
 
 class AbLang2(EncoderAbLM):
@@ -383,3 +384,61 @@ class AbLang2(EncoderAbLM):
             pass
 
         return None
+
+    def _mask_scan_batch(
+        self,
+        sequences: list[AntibodySequence],
+    ) -> list[MaskScanOutput]:
+        """Scan each position by masking it and collecting predictions."""
+        results = []
+        mask_token_id = self._tokenizer.convert_tokens_to_ids(self.mask_token)
+        sep_token_id = self._tokenizer.convert_tokens_to_ids(self.separator)
+
+        for seq in sequences:
+            formatted = self._format_for_model([seq])[0]
+            tokenized = self._tokenize([formatted])
+            input_ids = tokenized["input_ids"][0]
+            tokens = input_ids.tolist()
+
+            seq_len = len(tokens)
+            # Get vocab size from model config or tokenizer
+            if hasattr(self._model, "config") and hasattr(self._model.config, "vocab_size"):
+                vocab_size = self._model.config.vocab_size
+            else:
+                vocab_size = self._tokenizer.vocab_size
+
+            logits = torch.zeros(seq_len, vocab_size, device=self._primary_device)
+            mask = torch.zeros(seq_len, dtype=torch.bool, device=self._primary_device)
+
+            for i in range(1, seq_len - 1):  # Skip start and end tokens
+                # Skip padding and separator tokens
+                if tokens[i] == self._tokenizer.pad_token_id:
+                    continue
+                if tokens[i] == sep_token_id:
+                    continue
+
+                masked_ids = input_ids.clone()
+                masked_ids[i] = mask_token_id
+
+                inputs = {"input_ids": masked_ids.unsqueeze(0)}
+
+                with torch.no_grad():
+                    output_logits, _ = self._forward_logits(inputs)
+                    logits[i] = output_logits[0, i]
+                mask[i] = True
+
+            # Compute token offsets for this single sequence
+            offsets = self._compute_token_offsets([seq], tokenized)[0]
+
+            results.append(
+                MaskScanOutput(
+                    logits=logits.cpu(),
+                    original_token_ids=input_ids.cpu(),
+                    attention_mask=mask.cpu(),
+                    vocab=self._get_vocab(),
+                    sequence=seq,
+                    token_offsets=offsets,
+                )
+            )
+
+        return results

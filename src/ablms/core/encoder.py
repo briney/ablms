@@ -10,7 +10,7 @@ import torch
 from ablms.core.base import BaseAbLM
 from ablms.core.sequence import AntibodySequence
 from ablms.exceptions import UnsupportedOperationError
-from ablms.outputs import AttentionOutput, EmbeddingOutput, LogitsOutput
+from ablms.outputs import AttentionOutput, EmbeddingOutput, LogitsOutput, MaskScanOutput
 from ablms.utils.pooling import apply_pooling
 
 
@@ -502,6 +502,68 @@ class EncoderAbLM(BaseAbLM):
         """
         return self._fill_mask_batch(sequences, top_k)
 
+    def mask_scan(
+        self,
+        sequences: str | AntibodySequence | list[str] | list[AntibodySequence],
+        batch_size: int = 32,
+        show_progress: bool = True,
+    ) -> list[MaskScanOutput]:
+        """
+        Scan each position by masking it and collecting model predictions.
+
+        For each position in the sequence, masks that position and performs
+        a forward pass to get the model's prediction distribution. Useful for
+        computing per-position metrics like accuracy, perplexity, and entropy.
+
+        Args:
+            sequences: Input sequences (strings or AntibodySequence objects).
+            batch_size: Batch size for processing (per GPU when using multi-GPU).
+            show_progress: Whether to show a progress bar.
+
+        Returns:
+            List of MaskScanOutput objects, one per input sequence.
+
+        Raises:
+            UnsupportedOperationError: If model has no MLM head.
+        """
+        if not self.has_mlm_head:
+            raise UnsupportedOperationError(
+                f"Model '{self.model_name}' does not have a masked language "
+                "modeling head and cannot perform mask scanning."
+            )
+
+        sequences = self._normalize_input(sequences)
+        self._validate_input(sequences)
+
+        if len(sequences) == 0:
+            return []
+
+        executor = self._get_executor()
+        results = executor.execute(
+            method_name="_process_mask_scan_batch",
+            sequences=sequences,
+            batch_size=batch_size,
+            show_progress=show_progress,
+            progress_desc="Scanning masks",
+        )
+
+        return results
+
+    def _process_mask_scan_batch(
+        self,
+        sequences: list[AntibodySequence],
+    ) -> list[MaskScanOutput]:
+        """
+        Process a batch of sequences for mask scanning.
+
+        Args:
+            sequences: Batch of sequences.
+
+        Returns:
+            List of MaskScanOutput objects.
+        """
+        return self._mask_scan_batch(sequences)
+
     # Abstract methods that subclasses must implement
 
     @abstractmethod
@@ -587,4 +649,22 @@ class EncoderAbLM(BaseAbLM):
         top_k: int,
     ) -> list[list[AntibodySequence]]:
         """Fill masks for a batch of sequences."""
+        pass
+
+    @abstractmethod
+    def _mask_scan_batch(
+        self,
+        sequences: list[AntibodySequence],
+    ) -> list[MaskScanOutput]:
+        """
+        Scan each position by masking it and collecting predictions.
+
+        Model-specific implementation for mask scanning.
+
+        Args:
+            sequences: Batch of sequences.
+
+        Returns:
+            List of MaskScanOutput objects.
+        """
         pass
