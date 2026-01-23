@@ -22,9 +22,9 @@ embeddings = model.get_embeddings(["EVQLVESGGGLVQPGRSLRL..."])
 | **IgT5** | Encoder | Yes | HuggingFace |
 | **AntiBERTa2** | Encoder | Yes | HuggingFace |
 | **BALM** | Encoder | Yes | HuggingFace |
+| **ft-ESM** | Encoder | Yes | HuggingFace |
 | **AntiBERTy** | Encoder | No | antiberty package |
 | **AbLang2** | Encoder | Yes | ablang2 package |
-| **ft-ESM** | Encoder | Yes | HuggingFace |
 | **IgLM** | Generative | No | iglm package |
 
 ## Installation
