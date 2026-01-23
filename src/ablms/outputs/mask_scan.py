@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -94,27 +95,177 @@ class MaskScanOutput:
 
         return [idx_to_token.get(idx, "<UNK>") for idx in predictions]
 
-    @property
-    def accuracy(self) -> torch.Tensor:
+    def build_mask(
+        self,
+        heavy: torch.Tensor | None = None,
+        light: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """
+        Build a full-sequence mask from chain-specific masks.
+
+        Args:
+            heavy: Boolean mask for heavy chain positions. Length must match
+                heavy chain length from token_offsets. If None, heavy chain
+                is not masked (all True).
+            light: Boolean mask for light chain positions. Length must match
+                light chain length from token_offsets. If None, light chain
+                is not masked (all True).
+
+        Returns:
+            Full-length boolean mask tensor. Positions not covered by any
+            chain (e.g., special tokens) are True.
+
+        Raises:
+            ValueError: If token_offsets is None (required for chain mapping).
+            ValueError: If mask length doesn't match chain length.
+
+        Example:
+            >>> # Mask only CDR positions in heavy chain
+            >>> cdr_mask = torch.tensor([False, False, True, True, ...])
+            >>> mask = output.build_mask(heavy=cdr_mask)
+            >>> output.accuracy(mask=mask, agg="mean")
+        """
+        if self.token_offsets is None:
+            raise ValueError(
+                "token_offsets is required for build_mask(). "
+                "Ensure the MaskScanOutput was created with token_offsets."
+            )
+
+        # Initialize full mask as all True
+        full_mask = torch.ones(self.seq_len, dtype=torch.bool, device=self.logits.device)
+
+        # Apply heavy chain mask if provided
+        if heavy is not None:
+            if "heavy" not in self.token_offsets:
+                raise ValueError(
+                    "heavy mask provided but no heavy chain in token_offsets"
+                )
+            start, end = self.token_offsets["heavy"]
+            expected_len = end - start
+            if heavy.shape[0] != expected_len:
+                raise ValueError(
+                    f"heavy mask length {heavy.shape[0]} doesn't match "
+                    f"heavy chain length {expected_len}"
+                )
+            full_mask[start:end] = heavy.bool().to(full_mask.device)
+
+        # Apply light chain mask if provided
+        if light is not None:
+            if "light" not in self.token_offsets:
+                raise ValueError(
+                    "light mask provided but no light chain in token_offsets"
+                )
+            start, end = self.token_offsets["light"]
+            expected_len = end - start
+            if light.shape[0] != expected_len:
+                raise ValueError(
+                    f"light mask length {light.shape[0]} doesn't match "
+                    f"light chain length {expected_len}"
+                )
+            full_mask[start:end] = light.bool().to(full_mask.device)
+
+        return full_mask
+
+    def _aggregate(
+        self,
+        values: torch.Tensor,
+        mask: torch.Tensor,
+        agg: str | Callable | None,
+    ) -> torch.Tensor | float:
+        """
+        Apply aggregation to masked values.
+
+        Args:
+            values: Tensor of values to aggregate.
+            mask: Boolean mask indicating valid positions.
+            agg: Aggregation method. None returns raw values.
+                String options: "mean", "sum", "min", "max", "median".
+                Or pass a callable that takes a 1D tensor.
+
+        Returns:
+            Raw tensor if agg=None, else aggregated scalar.
+        """
+        if agg is None:
+            return values
+
+        # Get only valid positions
+        valid_values = values[mask.bool()]
+        if valid_values.numel() == 0:
+            return 0.0
+
+        if isinstance(agg, str):
+            agg_funcs = {
+                "mean": torch.mean,
+                "sum": torch.sum,
+                "min": torch.min,
+                "max": torch.max,
+                "median": torch.median,
+            }
+            if agg not in agg_funcs:
+                raise ValueError(
+                    f"Unknown aggregation: {agg}. Use one of {list(agg_funcs.keys())}"
+                )
+            result = agg_funcs[agg](valid_values)
+        else:
+            # Callable
+            result = agg(valid_values)
+
+        # Convert to float if scalar tensor
+        if isinstance(result, torch.Tensor) and result.ndim == 0:
+            return result.item()
+        return result
+
+    def accuracy(
+        self,
+        mask: torch.Tensor | None = None,
+        agg: str | Callable | None = None,
+    ) -> torch.Tensor | float:
         """
         Compute per-position accuracy.
 
+        Args:
+            mask: Optional boolean mask for positions to include. Combined
+                with attention_mask via AND. Use build_mask() to construct
+                from chain-specific masks. If None, uses attention_mask only.
+            agg: Aggregation method. None returns per-position tensor.
+                String options: "mean", "sum", "min", "max", "median".
+                Or pass a callable that takes a 1D tensor.
+
         Returns:
-            Tensor of shape [seq_len] with 1.0 where prediction matches original,
-            0.0 otherwise. Invalid positions (where attention_mask is False) are 0.0.
+            Per-position tensor if agg=None (shape [seq_len] with 1.0 where
+            prediction matches original, 0.0 otherwise), else aggregated scalar.
+            Invalid positions (where attention_mask is False) are 0.0.
         """
         correct = (self.predictions == self.original_token_ids).float()
-        return correct * self.attention_mask.float()
 
-    @property
-    def perplexity(self) -> torch.Tensor:
+        # Combine attention_mask with user mask
+        combined_mask = self.attention_mask
+        if mask is not None:
+            combined_mask = self.attention_mask & mask.to(self.attention_mask.device)
+
+        values = correct * combined_mask.float()
+        return self._aggregate(values, combined_mask, agg)
+
+    def perplexity(
+        self,
+        mask: torch.Tensor | None = None,
+        agg: str | Callable | None = None,
+    ) -> torch.Tensor | float:
         """
         Compute per-position perplexity.
 
         Perplexity is exp(-log_prob[original_token]) for each position.
 
+        Args:
+            mask: Optional boolean mask for positions to include. Combined
+                with attention_mask via AND. Use build_mask() to construct
+                from chain-specific masks. If None, uses attention_mask only.
+            agg: Aggregation method. None returns per-position tensor.
+                String options: "mean", "sum", "min", "max", "median".
+                Or pass a callable that takes a 1D tensor.
+
         Returns:
-            Tensor of shape [seq_len] with perplexity values.
+            Per-position tensor if agg=None (shape [seq_len]), else aggregated scalar.
             Invalid positions have perplexity of 0.0.
         """
         log_probs = self.log_probabilities
@@ -124,109 +275,163 @@ class MaskScanOutput:
         ).squeeze(-1)
         # Perplexity = exp(-log_prob)
         ppl = torch.exp(-original_log_probs)
-        return ppl * self.attention_mask.float()
 
-    @property
-    def entropy(self) -> torch.Tensor:
+        # Combine attention_mask with user mask
+        combined_mask = self.attention_mask
+        if mask is not None:
+            combined_mask = self.attention_mask & mask.to(self.attention_mask.device)
+
+        values = ppl * combined_mask.float()
+        return self._aggregate(values, combined_mask, agg)
+
+    def entropy(
+        self,
+        mask: torch.Tensor | None = None,
+        agg: str | Callable | None = None,
+    ) -> torch.Tensor | float:
         """
         Compute per-position entropy.
 
         Entropy = -sum(p * log(p)) over vocab for each position.
 
+        Args:
+            mask: Optional boolean mask for positions to include. Combined
+                with attention_mask via AND. Use build_mask() to construct
+                from chain-specific masks. If None, uses attention_mask only.
+            agg: Aggregation method. None returns per-position tensor.
+                String options: "mean", "sum", "min", "max", "median".
+                Or pass a callable that takes a 1D tensor.
+
         Returns:
-            Tensor of shape [seq_len] with entropy values.
+            Per-position tensor if agg=None (shape [seq_len]), else aggregated scalar.
             Invalid positions have entropy of 0.0.
         """
         probs = self.probabilities
         log_probs = self.log_probabilities
         # Entropy = -sum(p * log(p))
-        # Add small epsilon to avoid log(0)
         ent = -torch.sum(probs * log_probs, dim=-1)
-        return ent * self.attention_mask.float()
 
-    @property
-    def mean_accuracy(self) -> float:
-        """
-        Compute mean accuracy over valid positions.
+        # Combine attention_mask with user mask
+        combined_mask = self.attention_mask
+        if mask is not None:
+            combined_mask = self.attention_mask & mask.to(self.attention_mask.device)
 
-        Returns:
-            Mean accuracy as a float.
-        """
-        valid_count = self.attention_mask.sum().item()
-        if valid_count == 0:
-            return 0.0
-        return (self.accuracy.sum() / valid_count).item()
+        values = ent * combined_mask.float()
+        return self._aggregate(values, combined_mask, agg)
 
-    @property
-    def mean_perplexity(self) -> float:
+    def get_chain_accuracy(
+        self,
+        chain: str,
+        mask: torch.Tensor | None = None,
+        agg: str | Callable | None = None,
+    ) -> torch.Tensor | float | None:
         """
-        Compute mean perplexity over valid positions.
-
-        Returns:
-            Mean perplexity as a float.
-        """
-        valid_count = self.attention_mask.sum().item()
-        if valid_count == 0:
-            return 0.0
-        return (self.perplexity.sum() / valid_count).item()
-
-    @property
-    def mean_entropy(self) -> float:
-        """
-        Compute mean entropy over valid positions.
-
-        Returns:
-            Mean entropy as a float.
-        """
-        valid_count = self.attention_mask.sum().item()
-        if valid_count == 0:
-            return 0.0
-        return (self.entropy.sum() / valid_count).item()
-
-    def get_chain_accuracy(self, chain: str) -> torch.Tensor | None:
-        """
-        Get accuracy for a specific chain.
+        Get accuracy for a specific chain with optional masking.
 
         Args:
             chain: Chain name ("heavy" or "light").
+            mask: Optional boolean mask for positions within the chain.
+                Length must match chain length. If None, no additional masking.
+            agg: Aggregation method. None returns per-position tensor.
+                String options: "mean", "sum", "min", "max", "median".
+                Or pass a callable that takes a 1D tensor.
 
         Returns:
-            Accuracy tensor for the specified chain, or None if chain not present.
+            Accuracy tensor or aggregated scalar for the specified chain,
+            or None if chain not present.
         """
         if self.token_offsets is None or chain not in self.token_offsets:
             return None
         start, end = self.token_offsets[chain]
-        return self.accuracy[start:end]
+        chain_accuracy = self.accuracy()[start:end]
+        chain_attn_mask = self.attention_mask[start:end]
 
-    def get_chain_perplexity(self, chain: str) -> torch.Tensor | None:
+        # Combine with user mask if provided
+        if mask is not None:
+            if mask.shape[0] != (end - start):
+                raise ValueError(
+                    f"mask length {mask.shape[0]} doesn't match "
+                    f"chain length {end - start}"
+                )
+            chain_attn_mask = chain_attn_mask & mask.to(chain_attn_mask.device)
+
+        return self._aggregate(chain_accuracy, chain_attn_mask, agg)
+
+    def get_chain_perplexity(
+        self,
+        chain: str,
+        mask: torch.Tensor | None = None,
+        agg: str | Callable | None = None,
+    ) -> torch.Tensor | float | None:
         """
-        Get perplexity for a specific chain.
+        Get perplexity for a specific chain with optional masking.
 
         Args:
             chain: Chain name ("heavy" or "light").
+            mask: Optional boolean mask for positions within the chain.
+                Length must match chain length. If None, no additional masking.
+            agg: Aggregation method. None returns per-position tensor.
+                String options: "mean", "sum", "min", "max", "median".
+                Or pass a callable that takes a 1D tensor.
 
         Returns:
-            Perplexity tensor for the specified chain, or None if chain not present.
+            Perplexity tensor or aggregated scalar for the specified chain,
+            or None if chain not present.
         """
         if self.token_offsets is None or chain not in self.token_offsets:
             return None
         start, end = self.token_offsets[chain]
-        return self.perplexity[start:end]
+        chain_perplexity = self.perplexity()[start:end]
+        chain_attn_mask = self.attention_mask[start:end]
 
-    def get_chain_entropy(self, chain: str) -> torch.Tensor | None:
+        # Combine with user mask if provided
+        if mask is not None:
+            if mask.shape[0] != (end - start):
+                raise ValueError(
+                    f"mask length {mask.shape[0]} doesn't match "
+                    f"chain length {end - start}"
+                )
+            chain_attn_mask = chain_attn_mask & mask.to(chain_attn_mask.device)
+
+        return self._aggregate(chain_perplexity, chain_attn_mask, agg)
+
+    def get_chain_entropy(
+        self,
+        chain: str,
+        mask: torch.Tensor | None = None,
+        agg: str | Callable | None = None,
+    ) -> torch.Tensor | float | None:
         """
-        Get entropy for a specific chain.
+        Get entropy for a specific chain with optional masking.
 
         Args:
             chain: Chain name ("heavy" or "light").
+            mask: Optional boolean mask for positions within the chain.
+                Length must match chain length. If None, no additional masking.
+            agg: Aggregation method. None returns per-position tensor.
+                String options: "mean", "sum", "min", "max", "median".
+                Or pass a callable that takes a 1D tensor.
 
         Returns:
-            Entropy tensor for the specified chain, or None if chain not present.
+            Entropy tensor or aggregated scalar for the specified chain,
+            or None if chain not present.
         """
         if self.token_offsets is None or chain not in self.token_offsets:
             return None
         start, end = self.token_offsets[chain]
-        return self.entropy[start:end]
+        chain_entropy = self.entropy()[start:end]
+        chain_attn_mask = self.attention_mask[start:end]
+
+        # Combine with user mask if provided
+        if mask is not None:
+            if mask.shape[0] != (end - start):
+                raise ValueError(
+                    f"mask length {mask.shape[0]} doesn't match "
+                    f"chain length {end - start}"
+                )
+            chain_attn_mask = chain_attn_mask & mask.to(chain_attn_mask.device)
+
+        return self._aggregate(chain_entropy, chain_attn_mask, agg)
 
     def top_k_predictions(
         self, k: int = 5
@@ -271,5 +476,5 @@ class MaskScanOutput:
         return (
             f"MaskScanOutput(seq_len={self.seq_len}, "
             f"valid_positions={int(valid_count)}, "
-            f"mean_accuracy={self.mean_accuracy:.3f})"
+            f"mean_accuracy={self.accuracy(agg='mean'):.3f})"
         )
