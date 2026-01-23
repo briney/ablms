@@ -71,6 +71,7 @@ from ablms.encoders import (
     BALM,
     AntiBERTy,
     AbLang2,
+    FtESM,
 )
 
 # Generative models
@@ -117,6 +118,7 @@ __all__ = [
     "BALM",
     "AntiBERTy",
     "AbLang2",
+    "FtESM",
     # Generative models
     "IgLM",
 ]

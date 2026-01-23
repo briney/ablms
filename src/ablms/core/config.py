@@ -244,6 +244,26 @@ def _register_all_models() -> None:
         pass
 
     try:
+        from ablms.encoders.ftesm import FtESM
+
+        register_model(
+            ModelConfig(
+                name="ftesm",
+                model_class=FtESM,
+                model_id="brineylab/ft-ESM",
+                supports_paired=True,
+                max_length=1024,
+                embedding_dim=1280,
+                mask_token="<mask>",
+                separator="<cls><cls>",
+                has_mlm_head=True,
+                model_type="encoder",
+            )
+        )
+    except ImportError:
+        pass
+
+    try:
         from ablms.generators.iglm import IgLM
 
         register_model(

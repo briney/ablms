@@ -24,6 +24,7 @@ embeddings = model.get_embeddings(["EVQLVESGGGLVQPGRSLRL..."])
 | **BALM** | Encoder | Yes | HuggingFace |
 | **AntiBERTy** | Encoder | No | antiberty package |
 | **AbLang2** | Encoder | Yes | ablang2 package |
+| **ft-ESM** | Encoder | Yes | HuggingFace |
 | **IgLM** | Generative | No | iglm package |
 
 ## Installation
@@ -219,6 +220,7 @@ seq = AntibodySequence(heavy="EVQL<MASK>ESGG")
 # AntiBERTy: _
 # BALM: <mask>
 # AbLang2: *
+# ft-ESM: <mask>
 ```
 
 ### Output Classes
@@ -296,7 +298,7 @@ from ablms import list_models
 print(list_models())
 # {'igbert': 'encoder', 'igt5': 'encoder', 'antiberta2': 'encoder',
 #  'balm': 'encoder', 'antiberty': 'encoder', 'ablang2': 'encoder',
-#  'iglm': 'generative'}
+#  'ftesm': 'encoder', 'iglm': 'generative'}
 ```
 
 ## Notes on Specific Models
@@ -317,6 +319,27 @@ attention = model.get_attention(sequences)
 # These raise UnsupportedOperationError:
 # model.get_logits(sequences)
 # model.fill_mask(sequences)
+```
+
+### ft-ESM
+
+ft-ESM is an ESM2-based model (finetuned from `facebook/esm2_t33_650M_UR50D`) optimized for paired antibody sequences. It uses a unique `<cls><cls>` separator (two consecutive CLS tokens) between chains:
+
+```python
+from ablms import load_model, AntibodySequence
+
+model = load_model("ftesm")
+
+# Paired sequences work well with ft-ESM
+paired = AntibodySequence(
+    heavy="EVQLVESGGGLVQPGRSLRLSCAASGFTFS",
+    light="DIQMTQSPSSLSASVGDRVTITCRASQSIS"
+)
+embeddings = model.get_embeddings([paired])
+
+# Single chain sequences also work
+single = AntibodySequence(heavy="EVQLVESGGGLVQPGRSLRLSCAASGFTFS")
+embeddings = model.get_embeddings([single])
 ```
 
 ### Single-Chain Models
