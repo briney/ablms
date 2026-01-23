@@ -4,8 +4,12 @@
 from ablms.exceptions import InvalidAminoAcidError, SequenceTooLongError
 
 
-# Standard amino acid characters plus X for unknown
-VALID_AMINO_ACIDS: set[str] = set("ACDEFGHIKLMNPQRSTVWXY")
+# Valid amino acid characters:
+# - Standard 20 amino acids: ACDEFGHIKLMNPQRSTVWY
+# - X: ambiguous/unknown residue
+# - *: stop codon
+# - -: gap
+VALID_AMINO_ACIDS: set[str] = set("ACDEFGHIKLMNPQRSTVWXY*-")
 
 
 def validate_amino_acids(

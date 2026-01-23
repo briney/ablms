@@ -28,8 +28,12 @@ class Species(Enum):
     UNKNOWN = "unknown"
 
 
-# Valid amino acid characters (standard 20 + X for unknown)
-VALID_AMINO_ACIDS = set("ACDEFGHIKLMNPQRSTVWXY")
+# Valid amino acid characters:
+# - Standard 20 amino acids: ACDEFGHIKLMNPQRSTVWY
+# - X: ambiguous/unknown residue
+# - *: stop codon
+# - -: gap
+VALID_AMINO_ACIDS = set("ACDEFGHIKLMNPQRSTVWXY*-")
 
 
 class AntibodySequence:
