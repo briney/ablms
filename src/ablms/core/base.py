@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import warnings
 from abc import ABC, abstractmethod
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 import torch
 
@@ -79,7 +79,7 @@ class BaseAbLM(ABC):
         self._devices = resolve_devices(devices)
         self._primary_device = self._devices[0]
         self._is_multi_gpu = len(self._devices) > 1
-        self._executor: Optional[MultiGPUExecutor] = None
+        self._executor: MultiGPUExecutor | None = None
         self._model = None
         self._tokenizer = None
 

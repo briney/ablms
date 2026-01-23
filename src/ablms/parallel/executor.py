@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 import torch
 import torch.multiprocessing as mp
@@ -62,12 +62,12 @@ class MultiGPUExecutor:
         self._is_single_device = len(devices) == 1
 
         # Worker management (initialized lazily)
-        self._workers: Optional[list[WorkerHandle]] = None
-        self._result_queue: Optional[mp.Queue] = None
-        self._mp_context: Optional[mp.context.SpawnContext] = None
+        self._workers: list[WorkerHandle] | None = None
+        self._result_queue: mp.Queue | None = None
+        self._mp_context: mp.context.SpawnContext | None = None
 
         # Single-device mode: local model (initialized lazily)
-        self._local_model: Optional[BaseAbLM] = None
+        self._local_model: BaseAbLM | None = None
 
     @property
     def is_initialized(self) -> bool:
@@ -148,7 +148,7 @@ class MultiGPUExecutor:
         sequences: list[AntibodySequence],
         batch_size: int,
         show_progress: bool = True,
-        progress_desc: Optional[str] = None,
+        progress_desc: str | None = None,
         **method_kwargs: Any,
     ) -> Any:
         """
@@ -192,7 +192,7 @@ class MultiGPUExecutor:
         sequences: list[AntibodySequence],
         batch_size: int,
         show_progress: bool,
-        progress_desc: Optional[str],
+        progress_desc: str | None,
         **method_kwargs: Any,
     ) -> Any:
         """Execute on a single GPU (no subprocess overhead)."""
@@ -229,7 +229,7 @@ class MultiGPUExecutor:
         sequences: list[AntibodySequence],
         batch_size: int,
         show_progress: bool,
-        progress_desc: Optional[str],
+        progress_desc: str | None,
         **method_kwargs: Any,
     ) -> Any:
         """Execute with multi-GPU parallelism."""
@@ -375,6 +375,40 @@ class MultiGPUExecutor:
         # Unknown type - return as list
         return results
 
+    def _pad_tensors_to_max_length(
+        self, tensors: list[torch.Tensor]
+    ) -> list[torch.Tensor]:
+        """
+        Pad tensors to max sequence length for concatenation.
+
+        When batches are tokenized separately, they may have different sequence
+        lengths due to per-batch padding. This method pads shorter tensors with
+        zeros to match the maximum sequence length across all tensors.
+
+        Args:
+            tensors: List of tensors to pad.
+
+        Returns:
+            List of tensors with uniform sequence length (dimension 1).
+        """
+        if not tensors or tensors[0].dim() < 2:
+            return tensors
+
+        max_seq_len = max(t.shape[1] for t in tensors)
+        padded = []
+        for t in tensors:
+            if t.shape[1] < max_seq_len:
+                pad_size = max_seq_len - t.shape[1]
+                if t.dim() == 3:  # [batch, seq, hidden]
+                    padding = torch.zeros(
+                        t.shape[0], pad_size, t.shape[2], dtype=t.dtype
+                    )
+                else:  # [batch, seq]
+                    padding = torch.zeros(t.shape[0], pad_size, dtype=t.dtype)
+                t = torch.cat([t, padding], dim=1)
+            padded.append(t)
+        return padded
+
     def _combine_tuple_results(
         self, results: list[tuple[Any, ...]]
     ) -> tuple[Any, ...]:
@@ -387,6 +421,8 @@ class MultiGPUExecutor:
             first_elem = elements[0]
 
             if isinstance(first_elem, torch.Tensor):
+                # Pad tensors to max sequence length before concatenation
+                elements = self._pad_tensors_to_max_length(elements)
                 # Concatenate tensors along batch dimension
                 combined.append(torch.cat(elements, dim=0))
 
@@ -398,6 +434,8 @@ class MultiGPUExecutor:
                     layer_combined = []
                     for layer_idx in range(num_layers):
                         layer_tensors = [e[layer_idx] for e in elements]
+                        # Pad tensors to max sequence length before concatenation
+                        layer_tensors = self._pad_tensors_to_max_length(layer_tensors)
                         layer_combined.append(torch.cat(layer_tensors, dim=0))
                     combined.append(layer_combined)
                 else:

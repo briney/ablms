@@ -137,6 +137,36 @@ class EmbeddingOutput:
             layer=self.layer,
         )
 
+    def get_sequence_tokens(self, idx: int) -> torch.Tensor:
+        """
+        Get unpadded token embeddings for a single sequence.
+
+        Args:
+            idx: Batch index.
+
+        Returns:
+            Tensor of shape [actual_seq_len, hidden_dim] without padding.
+        """
+        if self.is_pooled:
+            raise ValueError("Cannot get token embeddings from pooled output.")
+        if self.attention_mask is None:
+            return self.embeddings[idx]
+        mask = self.attention_mask[idx].bool()
+        return self.embeddings[idx][mask]
+
+    def __getitem__(self, idx: int) -> torch.Tensor:
+        """Index access returns unpadded embeddings for sequence idx."""
+        return self.get_sequence_tokens(idx)
+
+    def __iter__(self):
+        """Iterate over unpadded embeddings for each sequence."""
+        for i in range(self.batch_size):
+            yield self.get_sequence_tokens(i)
+
+    def __len__(self) -> int:
+        """Return number of sequences."""
+        return self.batch_size
+
     def __repr__(self) -> str:
         """Return a string representation."""
         shape_str = "x".join(str(d) for d in self.embeddings.shape)

@@ -30,6 +30,11 @@ ruff check src/ tests/
 mypy src/
 ```
 
+## Code Style
+
+- **Type hints**: Use Python 3.10+ union syntax. Write `x | None` instead of `Optional[x]` and `x | y` instead of `Union[x, y]`.
+- **Imports**: Do not import `Optional` or `Union` from `typing`.
+
 ## Architecture
 
 ablms provides a unified Python API for multiple antibody language models with different architectures.
