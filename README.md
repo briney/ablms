@@ -244,6 +244,29 @@ heavy_ppl = output.get_chain_perplexity("heavy", agg="mean")
 light_ent = output.get_chain_entropy("light", agg="mean")
 ```
 
+#### Custom Position Masking
+
+Focus metrics on specific positions (e.g., CDR regions) using boolean masks:
+
+```python
+import torch
+
+# Build a mask from chain-specific masks
+# True = include position, False = exclude position
+heavy_cdr_mask = torch.zeros(20, dtype=torch.bool)
+heavy_cdr_mask[5:12] = True  # Only include positions 5-11
+
+# Create full-sequence mask from chain masks
+mask = output.build_mask(heavy=heavy_cdr_mask)  # light chain defaults to all True
+
+# Compute metrics only for masked positions
+cdr_accuracy = output.accuracy(mask=mask, agg="mean")
+cdr_perplexity = output.perplexity(mask=mask, agg="mean")
+
+# Or use chain-specific methods directly with chain-length masks
+heavy_cdr_acc = output.get_chain_accuracy("heavy", mask=heavy_cdr_mask, agg="mean")
+```
+
 #### Additional Properties
 
 ```python
@@ -282,7 +305,7 @@ All methods return structured output objects with helpful properties:
 - **`LogitsOutput`**: MLM logits with `probabilities`, `predictions`, and `top_k_predictions()`
 - **`AttentionOutput`**: Attention weights with `get_layer()`, `get_head()`, and `get_mean_attention()`
 - **`GenerationOutput`**: Generated sequences with `get_top_k()` and `filter_by_score()`
-- **`MaskScanOutput`**: Per-position predictions with `accuracy()`, `perplexity()`, `entropy()`, and chain-specific variants
+- **`MaskScanOutput`**: Per-position predictions with `accuracy()`, `perplexity()`, `entropy()`, and `build_mask()` for custom position filtering
 
 ### Device Management
 
