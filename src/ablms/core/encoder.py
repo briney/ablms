@@ -517,7 +517,10 @@ class EncoderAbLM(BaseAbLM):
 
         Args:
             sequences: Input sequences (strings or AntibodySequence objects).
-            batch_size: Batch size for processing (per GPU when using multi-GPU).
+            batch_size: Number of masked variants to process in a single forward
+                pass. For a sequence of length L, L masked variants are created
+                (one per position). These variants are batched together using
+                this batch_size for efficient GPU utilization.
             show_progress: Whether to show a progress bar.
 
         Returns:
@@ -539,12 +542,17 @@ class EncoderAbLM(BaseAbLM):
             return []
 
         executor = self._get_executor()
+        # For mask_scan, each sequence is processed individually but the batch_size
+        # controls how many masked variants are batched together for each sequence.
+        # We set executor batch_size=1 so each sequence is processed one at a time,
+        # and pass the user's batch_size to control internal batching of masked variants.
         results = executor.execute(
             method_name="_process_mask_scan_batch",
             sequences=sequences,
-            batch_size=batch_size,
+            batch_size=1,  # Process one sequence at a time
             show_progress=show_progress,
             progress_desc="Scanning masks",
+            variants_batch_size=batch_size,  # Batch size for masked variants
         )
 
         return results
@@ -552,17 +560,21 @@ class EncoderAbLM(BaseAbLM):
     def _process_mask_scan_batch(
         self,
         sequences: list[AntibodySequence],
+        variants_batch_size: int = 32,
     ) -> list[MaskScanOutput]:
         """
         Process a batch of sequences for mask scanning.
 
         Args:
-            sequences: Batch of sequences.
+            sequences: Batch of sequences (typically just one sequence at a time
+                since mask_scan processes sequences individually).
+            variants_batch_size: Number of masked variants to process in one
+                forward pass for GPU efficiency.
 
         Returns:
             List of MaskScanOutput objects.
         """
-        return self._mask_scan_batch(sequences)
+        return self._mask_scan_batch(sequences, variants_batch_size)
 
     # Abstract methods that subclasses must implement
 
@@ -655,16 +667,22 @@ class EncoderAbLM(BaseAbLM):
     def _mask_scan_batch(
         self,
         sequences: list[AntibodySequence],
+        batch_size: int = 32,
     ) -> list[MaskScanOutput]:
         """
         Scan each position by masking it and collecting predictions.
 
-        Model-specific implementation for mask scanning.
+        Model-specific implementation for mask scanning. Creates masked variants
+        of each input sequence (one variant per position) and batches them together
+        for efficient GPU processing.
 
         Args:
-            sequences: Batch of sequences.
+            sequences: Input sequences to scan.
+            batch_size: Number of masked variants to process in one forward pass.
+                For a sequence of length L, there are L masked variants. This
+                parameter controls how many of those variants are batched together.
 
         Returns:
-            List of MaskScanOutput objects.
+            List of MaskScanOutput objects, one per input sequence.
         """
         pass

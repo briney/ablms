@@ -16,19 +16,27 @@ if TYPE_CHECKING:
 @dataclass
 class MaskScanOutput:
     """
-    Output container for mask scan results.
+    Output container for mask scan results for a single sequence.
 
     Contains per-position predictions when each position was masked,
     along with helper methods for computing accuracy, perplexity, and entropy.
 
+    The `mask_scan()` method returns a list of `MaskScanOutput` objects, one per
+    input sequence. Each `MaskScanOutput` contains the results for scanning all
+    positions of that single sequence.
+
     Attributes:
-        logits: Raw logits when each position was masked. Shape: [seq_len, vocab_size].
-        original_token_ids: Original token indices at each position. Shape: [seq_len].
-        attention_mask: Boolean mask indicating valid positions (excludes special tokens).
-            Shape: [seq_len].
+        logits: Raw logits when each position was masked.
+            Shape: ``[seq_len, vocab_size]`` where ``seq_len`` includes special tokens.
+        original_token_ids: Original token indices at each position.
+            Shape: ``[seq_len]``.
+        attention_mask: Boolean mask indicating valid (scannable) positions.
+            True for amino acid positions, False for special tokens (CLS, SEP, etc.).
+            Shape: ``[seq_len]``.
         vocab: Dictionary mapping token strings to indices.
-        sequence: Original input sequence.
-        token_offsets: Dictionary mapping chain names to (start, end) positions.
+        sequence: Original input sequence (AntibodySequence object).
+        token_offsets: Dictionary mapping chain names ("heavy", "light") to
+            ``(start, end)`` token positions for extracting chain-specific metrics.
     """
 
     logits: torch.Tensor

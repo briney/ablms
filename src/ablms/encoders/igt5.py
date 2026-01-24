@@ -232,6 +232,7 @@ class IgT5(EncoderAbLM):
     def _mask_scan_batch(
         self,
         sequences: list[AntibodySequence],
+        batch_size: int = 32,
     ) -> list[MaskScanOutput]:
         """IgT5 does not support mask scanning."""
         raise UnsupportedOperationError(

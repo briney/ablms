@@ -369,9 +369,12 @@ class IgBERT(EncoderAbLM):
     def _mask_scan_batch(
         self,
         sequences: list[AntibodySequence],
+        batch_size: int = 32,
     ) -> list[MaskScanOutput]:
         """Scan each position by masking it and collecting predictions."""
         results = []
+        sep_token_id = self._tokenizer.sep_token_id
+        mask_token_id = self._tokenizer.mask_token_id
 
         for seq in sequences:
             formatted = self._format_for_model([seq])[0]
@@ -380,27 +383,40 @@ class IgBERT(EncoderAbLM):
             seq_len = len(tokens)
             vocab_size = self._model.config.vocab_size
             logits = torch.zeros(seq_len, vocab_size, device=self._primary_device)
-            mask = torch.zeros(seq_len, dtype=torch.bool, device=self._primary_device)
+            valid_mask = torch.zeros(seq_len, dtype=torch.bool, device=self._primary_device)
 
-            sep_token_id = self._tokenizer.sep_token_id
-
+            # Build list of positions to mask (skip special tokens)
+            positions_to_mask = []
             for i in range(1, seq_len - 1):  # Skip [CLS] and final [SEP]
-                # Skip separator tokens
-                if tokens[i] == sep_token_id:
-                    continue
+                if tokens[i] != sep_token_id:
+                    positions_to_mask.append(i)
 
-                masked_tokens = tokens.copy()
-                masked_tokens[i] = self._tokenizer.mask_token_id
+            # Process masked variants in batches
+            for batch_start in range(0, len(positions_to_mask), batch_size):
+                batch_positions = positions_to_mask[batch_start:batch_start + batch_size]
+                current_batch_size = len(batch_positions)
 
-                inputs = {
-                    "input_ids": torch.tensor([masked_tokens], device=self._primary_device),
-                    "attention_mask": torch.ones(1, seq_len, device=self._primary_device),
-                }
+                # Create masked variants for this batch
+                masked_variants = []
+                for pos in batch_positions:
+                    masked_tokens = tokens.copy()
+                    masked_tokens[pos] = mask_token_id
+                    masked_variants.append(masked_tokens)
 
+                # Stack into batch tensors
+                input_ids = torch.tensor(masked_variants, device=self._primary_device)
+                attention_mask = torch.ones(
+                    current_batch_size, seq_len, device=self._primary_device
+                )
+
+                # Single batched forward pass
                 with torch.no_grad():
-                    outputs = self._model(**inputs)
-                    logits[i] = outputs.logits[0, i]
-                mask[i] = True
+                    outputs = self._model(input_ids=input_ids, attention_mask=attention_mask)
+
+                # Extract logits for each masked position
+                for batch_idx, pos in enumerate(batch_positions):
+                    logits[pos] = outputs.logits[batch_idx, pos]
+                    valid_mask[pos] = True
 
             # Compute token offsets for this single sequence
             tokenized = {"input_ids": torch.tensor([tokens], device=self._primary_device)}
@@ -410,7 +426,7 @@ class IgBERT(EncoderAbLM):
                 MaskScanOutput(
                     logits=logits.cpu(),
                     original_token_ids=torch.tensor(tokens, device="cpu"),
-                    attention_mask=mask.cpu(),
+                    attention_mask=valid_mask.cpu(),
                     vocab=self._get_vocab(),
                     sequence=seq,
                     token_offsets=offsets,

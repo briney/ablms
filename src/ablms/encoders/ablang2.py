@@ -388,11 +388,19 @@ class AbLang2(EncoderAbLM):
     def _mask_scan_batch(
         self,
         sequences: list[AntibodySequence],
+        batch_size: int = 32,
     ) -> list[MaskScanOutput]:
         """Scan each position by masking it and collecting predictions."""
         results = []
         mask_token_id = self._tokenizer.convert_tokens_to_ids(self.mask_token)
         sep_token_id = self._tokenizer.convert_tokens_to_ids(self.separator)
+        pad_token_id = self._tokenizer.pad_token_id
+
+        # Get vocab size from model config or tokenizer
+        if hasattr(self._model, "config") and hasattr(self._model.config, "vocab_size"):
+            vocab_size = self._model.config.vocab_size
+        else:
+            vocab_size = self._tokenizer.vocab_size
 
         for seq in sequences:
             formatted = self._format_for_model([seq])[0]
@@ -401,31 +409,37 @@ class AbLang2(EncoderAbLM):
             tokens = input_ids.tolist()
 
             seq_len = len(tokens)
-            # Get vocab size from model config or tokenizer
-            if hasattr(self._model, "config") and hasattr(self._model.config, "vocab_size"):
-                vocab_size = self._model.config.vocab_size
-            else:
-                vocab_size = self._tokenizer.vocab_size
-
             logits = torch.zeros(seq_len, vocab_size, device=self._primary_device)
-            mask = torch.zeros(seq_len, dtype=torch.bool, device=self._primary_device)
+            valid_mask = torch.zeros(seq_len, dtype=torch.bool, device=self._primary_device)
 
+            # Build list of positions to mask (skip special tokens)
+            positions_to_mask = []
             for i in range(1, seq_len - 1):  # Skip start and end tokens
-                # Skip padding and separator tokens
-                if tokens[i] == self._tokenizer.pad_token_id:
-                    continue
-                if tokens[i] == sep_token_id:
-                    continue
+                if tokens[i] != pad_token_id and tokens[i] != sep_token_id:
+                    positions_to_mask.append(i)
 
-                masked_ids = input_ids.clone()
-                masked_ids[i] = mask_token_id
+            # Process masked variants in batches
+            for batch_start in range(0, len(positions_to_mask), batch_size):
+                batch_positions = positions_to_mask[batch_start:batch_start + batch_size]
 
-                inputs = {"input_ids": masked_ids.unsqueeze(0)}
+                # Create masked variants for this batch
+                masked_variants = []
+                for pos in batch_positions:
+                    masked_ids = input_ids.clone()
+                    masked_ids[pos] = mask_token_id
+                    masked_variants.append(masked_ids)
 
+                # Stack into batch tensor
+                batch_input_ids = torch.stack(masked_variants, dim=0)
+
+                # Single batched forward pass
                 with torch.no_grad():
-                    output_logits, _ = self._forward_logits(inputs)
-                    logits[i] = output_logits[0, i]
-                mask[i] = True
+                    output_logits, _ = self._forward_logits({"input_ids": batch_input_ids})
+
+                # Extract logits for each masked position
+                for batch_idx, pos in enumerate(batch_positions):
+                    logits[pos] = output_logits[batch_idx, pos]
+                    valid_mask[pos] = True
 
             # Compute token offsets for this single sequence
             offsets = self._compute_token_offsets([seq], tokenized)[0]
@@ -434,7 +448,7 @@ class AbLang2(EncoderAbLM):
                 MaskScanOutput(
                     logits=logits.cpu(),
                     original_token_ids=input_ids.cpu(),
-                    attention_mask=mask.cpu(),
+                    attention_mask=valid_mask.cpu(),
                     vocab=self._get_vocab(),
                     sequence=seq,
                     token_offsets=offsets,
