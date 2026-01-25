@@ -24,6 +24,7 @@ embeddings = model.get_embeddings(["EVQLVESGGGLVQPGRSLRL..."])
 | **BALM** | Encoder | Yes | HuggingFace |
 | **ft-ESM** | Encoder | Yes | HuggingFace |
 | **AntiBERTy** | Encoder | No | antiberty package |
+| **AbLang** | Encoder | No | ablang package |
 | **AbLang2** | Encoder | Yes | ablang2 package |
 | **IgLM** | Generative | No | iglm package |
 
@@ -293,6 +294,7 @@ seq = AntibodySequence(heavy="EVQL<MASK>ESGG")
 # IgBERT: [MASK]
 # AntiBERTy: _
 # BALM: <mask>
+# AbLang: *
 # AbLang2: *
 # ft-ESM: <mask>
 ```
@@ -372,8 +374,8 @@ from ablms import list_models
 
 print(list_models())
 # {'igbert': 'encoder', 'igt5': 'encoder', 'antiberta2': 'encoder',
-#  'balm': 'encoder', 'antiberty': 'encoder', 'ablang2': 'encoder',
-#  'ftesm': 'encoder', 'iglm': 'generative'}
+#  'balm': 'encoder', 'antiberty': 'encoder', 'ablang': 'encoder',
+#  'ablang2': 'encoder', 'ftesm': 'encoder', 'iglm': 'generative'}
 ```
 
 ## Notes on Specific Models
@@ -419,12 +421,14 @@ embeddings = model.get_embeddings([single])
 
 ### Single-Chain Models
 
-AntiBERTy only supports single chain sequences. Passing paired sequences will raise `PairedSequenceError`:
+AntiBERTy and AbLang only support single chain sequences. Passing paired sequences will raise `PairedSequenceError`:
 
 ```python
 from ablms import load_model, AntibodySequence
 
 model = load_model("antiberty")  # Single-chain only
+# or
+model = load_model("ablang")     # Single-chain only
 
 # This works:
 model.get_embeddings([AntibodySequence(heavy="EVQLVESGG...")])
@@ -432,6 +436,8 @@ model.get_embeddings([AntibodySequence(heavy="EVQLVESGG...")])
 # This raises PairedSequenceError:
 # model.get_embeddings([AntibodySequence(heavy="...", light="...")])
 ```
+
+Note: AbLang uses separate models for heavy and light chains. The appropriate model is automatically selected based on the input sequence type, and mixed batches (containing both heavy and light chain sequences) are supported.
 
 ## License
 
