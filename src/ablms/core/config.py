@@ -244,6 +244,26 @@ def _register_all_models() -> None:
         pass
 
     try:
+        from ablms.encoders.ablang import AbLang
+
+        register_model(
+            ModelConfig(
+                name="ablang",
+                model_class=AbLang,
+                model_id="ablang",
+                supports_paired=False,
+                max_length=160,
+                embedding_dim=768,
+                mask_token="*",
+                separator=None,
+                has_mlm_head=True,
+                model_type="encoder",
+            )
+        )
+    except ImportError:
+        pass
+
+    try:
         from ablms.encoders.ftesm import FtESM
 
         register_model(

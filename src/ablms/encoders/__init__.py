@@ -6,6 +6,7 @@ from ablms.encoders.antiberta2 import AntiBERTa2
 from ablms.encoders.balm import BALM
 from ablms.encoders.antiberty import AntiBERTy
 from ablms.encoders.ablang2 import AbLang2
+from ablms.encoders.ablang import AbLang
 from ablms.encoders.ftesm import FtESM
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "BALM",
     "AntiBERTy",
     "AbLang2",
+    "AbLang",
     "FtESM",
 ]
