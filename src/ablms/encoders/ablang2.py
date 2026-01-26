@@ -68,7 +68,9 @@ class AbLang2(EncoderAbLM):
         self._ablang = ablang2.pretrained()
         self._ablang.freeze()
 
-        # Move to device
+        # Move entire model to device (both AbRep and AbLang with AbHead)
+        if hasattr(self._ablang, "AbLang"):
+            self._ablang.AbLang = self._ablang.AbLang.to(self._primary_device)
         if hasattr(self._ablang, "AbRep"):
             self._ablang.AbRep = self._ablang.AbRep.to(self._primary_device)
             self._model = self._ablang.AbRep
@@ -84,7 +86,8 @@ class AbLang2(EncoderAbLM):
         """
         Format sequences for AbLang2.
 
-        AbLang2 uses "*" as the mask token and "|" as the chain separator.
+        AbLang2 uses "*" as the mask token and expects format "<heavy>|<light>".
+        We format sequences this way and use w_extra_tkns=False in tokenization.
         """
         formatted = []
         for seq in sequences:
@@ -94,15 +97,15 @@ class AbLang2(EncoderAbLM):
                 heavy = seq.heavy_chain.replace(
                     AntibodySequence.MASK_TOKEN, self.mask_token
                 )
-                parts.append(heavy)
+                parts.append(f"<{heavy}>")
 
             if seq.light_chain is not None:
                 light = seq.light_chain.replace(
                     AntibodySequence.MASK_TOKEN, self.mask_token
                 )
-                parts.append(light)
+                parts.append(f"<{light}>")
 
-            # AbLang2 uses "|" separator
+            # AbLang2 uses "|" separator between <heavy> and <light>
             formatted.append(self.separator.join(parts))
 
         return formatted
@@ -111,17 +114,18 @@ class AbLang2(EncoderAbLM):
         self, formatted_sequences: list[str]
     ) -> dict[str, torch.Tensor]:
         """Tokenize formatted sequences using AbLang2 tokenizer."""
-        # AbLang2 has its own tokenization approach
-        encoded = self._tokenizer(
-            formatted_sequences,
-            pad=True,
-            return_tensors="pt",
-        )
+        # AbLang2 tokenizer doesn't support return_tensors - returns tensor directly
+        # Use w_extra_tkns=False since we pre-format sequences as <heavy>|<light>
+        encoded = self._tokenizer(formatted_sequences, pad=True, w_extra_tkns=False)
 
-        if isinstance(encoded, dict):
+        if isinstance(encoded, torch.Tensor):
+            input_ids = encoded.to(self._primary_device)
+            # Create attention mask based on padding
+            attention_mask = (input_ids != self._tokenizer.pad_token).long()
+            return {"input_ids": input_ids, "attention_mask": attention_mask}
+        elif isinstance(encoded, dict):
             return {k: v.to(self._primary_device) for k, v in encoded.items()}
         else:
-            # Handle if tokenizer returns just input_ids
             return {"input_ids": encoded.to(self._primary_device)}
 
     def _compute_token_offsets(
@@ -133,8 +137,8 @@ class AbLang2(EncoderAbLM):
         offsets = []
         input_ids = tokenized["input_ids"]
 
-        # Find separator token ID
-        sep_token_id = self._tokenizer.convert_tokens_to_ids(self.separator)
+        # Find separator token ID (ablang2 tokenizer has sep_token attribute)
+        sep_token_id = self._tokenizer.sep_token
 
         for idx, seq in enumerate(sequences):
             seq_offsets = {}
@@ -170,27 +174,23 @@ class AbLang2(EncoderAbLM):
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Forward pass to get embeddings from a specific layer."""
         input_ids = tokenized["input_ids"]
+        num_layers = len(self._model.encoder_blocks) + 1  # 0 is embedding, 1-12 are encoder blocks
+
+        # Convert negative layer index to positive
+        if layer < 0:
+            layer_idx = num_layers + layer
+        else:
+            layer_idx = layer
 
         with torch.no_grad():
-            # AbLang2 model forward pass
-            outputs = self._model(
-                input_ids,
-                output_hidden_states=True,
-            )
+            # AbLang2 uses return_rep_layers to get specific layer outputs
+            outputs = self._model(input_ids, return_rep_layers=[layer_idx])
 
-        # Get hidden states
-        if hasattr(outputs, "hidden_states"):
-            hidden_states = outputs.hidden_states
-        elif isinstance(outputs, tuple) and len(outputs) > 1:
-            hidden_states = outputs[1]
-        else:
-            # Fallback: use last_hidden_state
-            hidden_states = [outputs.last_hidden_state if hasattr(outputs, "last_hidden_state") else outputs[0]]
-
-        embeddings = hidden_states[layer]
+        # outputs.many_hidden_states is a dict {layer_idx: tensor}
+        embeddings = outputs.many_hidden_states[layer_idx]
 
         # Create attention mask
-        attention_mask = (input_ids != self._tokenizer.pad_token_id).long()
+        attention_mask = (input_ids != self._tokenizer.pad_token).long()
 
         return embeddings, attention_mask
 
@@ -200,21 +200,17 @@ class AbLang2(EncoderAbLM):
     ) -> tuple[list[torch.Tensor], torch.Tensor | None]:
         """Forward pass to get all hidden states."""
         input_ids = tokenized["input_ids"]
+        num_layers = len(self._model.encoder_blocks) + 1  # 0 is embedding, 1-12 are encoder blocks
 
         with torch.no_grad():
-            outputs = self._model(
-                input_ids,
-                output_hidden_states=True,
-            )
+            # Request all layers (0 = embedding, 1-12 = encoder blocks)
+            outputs = self._model(input_ids, return_rep_layers=list(range(num_layers)))
 
-        if hasattr(outputs, "hidden_states"):
-            hidden_states = list(outputs.hidden_states)
-        elif isinstance(outputs, tuple) and len(outputs) > 1:
-            hidden_states = list(outputs[1])
-        else:
-            hidden_states = [outputs.last_hidden_state if hasattr(outputs, "last_hidden_state") else outputs[0]]
+        # outputs.many_hidden_states is a dict {layer_idx: tensor}
+        # Convert to list in order
+        hidden_states = [outputs.many_hidden_states[i] for i in range(num_layers)]
 
-        attention_mask = (input_ids != self._tokenizer.pad_token_id).long()
+        attention_mask = (input_ids != self._tokenizer.pad_token).long()
 
         return hidden_states, attention_mask
 
@@ -226,19 +222,18 @@ class AbLang2(EncoderAbLM):
         input_ids = tokenized["input_ids"]
 
         with torch.no_grad():
-            outputs = self._model(
-                input_ids,
-                output_attentions=True,
-            )
+            # AbLang2 uses return_attn_weights parameter
+            outputs = self._model(input_ids, return_attn_weights=True)
 
-        if hasattr(outputs, "attentions") and outputs.attentions is not None:
-            attentions = torch.stack(outputs.attentions, dim=1)
+        # outputs.attention_weights is a list of attention tensors per layer
+        if outputs.attention_weights:
+            attentions = torch.stack(outputs.attention_weights, dim=1)
         else:
             # Return empty attention if not available
             batch_size, seq_len = input_ids.shape
             attentions = torch.zeros(batch_size, 1, 1, seq_len, seq_len, device=self._primary_device)
 
-        attention_mask = (input_ids != self._tokenizer.pad_token_id).long()
+        attention_mask = (input_ids != self._tokenizer.pad_token).long()
 
         return attentions, attention_mask
 
@@ -250,20 +245,10 @@ class AbLang2(EncoderAbLM):
         input_ids = tokenized["input_ids"]
 
         with torch.no_grad():
-            # Use AbLang2's MLM head if available
-            if hasattr(self._ablang, "AbLang"):
-                outputs = self._ablang.AbLang(input_ids)
-            else:
-                outputs = self._model(input_ids)
+            # AbLang2's AbLang model returns logits directly when called without special args
+            logits = self._ablang.AbLang(input_ids)
 
-        if hasattr(outputs, "logits"):
-            logits = outputs.logits
-        elif isinstance(outputs, tuple):
-            logits = outputs[0]
-        else:
-            logits = outputs
-
-        attention_mask = (input_ids != self._tokenizer.pad_token_id).long()
+        attention_mask = (input_ids != self._tokenizer.pad_token).long()
 
         return logits, attention_mask
 
@@ -271,11 +256,14 @@ class AbLang2(EncoderAbLM):
         """Get the vocabulary mapping."""
         if hasattr(self._tokenizer, "get_vocab"):
             return self._tokenizer.get_vocab()
+        elif hasattr(self._tokenizer, "aa_to_token"):
+            # AbLang2 tokenizer uses aa_to_token
+            return self._tokenizer.aa_to_token
         elif hasattr(self._tokenizer, "vocab"):
             return self._tokenizer.vocab
         else:
             # Build vocab from tokenizer attributes
-            return {str(i): i for i in range(self._tokenizer.vocab_size)}
+            return {str(i): i for i in range(len(self._tokenizer.aa_to_token))}
 
     def _compute_pseudo_ll(self, sequence: AntibodySequence) -> float:
         """Compute pseudo log-likelihood for a single sequence."""
@@ -283,13 +271,13 @@ class AbLang2(EncoderAbLM):
         tokenized = self._tokenize([formatted])
         input_ids = tokenized["input_ids"][0]
 
-        mask_token_id = self._tokenizer.convert_tokens_to_ids(self.mask_token)
+        mask_token_id = self._tokenizer.mask_token
         total_ll = 0.0
 
         for i in range(len(input_ids)):
-            if input_ids[i] == self._tokenizer.pad_token_id:
+            if input_ids[i] == self._tokenizer.pad_token:
                 continue
-            if input_ids[i] == self._tokenizer.convert_tokens_to_ids(self.separator):
+            if input_ids[i] == self._tokenizer.sep_token:
                 continue
 
             masked_ids = input_ids.clone()
@@ -312,7 +300,7 @@ class AbLang2(EncoderAbLM):
     ) -> list[list[AntibodySequence]]:
         """Fill masks for a batch of sequences."""
         results = []
-        mask_token_id = self._tokenizer.convert_tokens_to_ids(self.mask_token)
+        mask_token_id = self._tokenizer.mask_token
 
         for seq in sequences:
             formatted = self._format_for_model([seq])[0]
@@ -367,9 +355,10 @@ class AbLang2(EncoderAbLM):
         """Decode token IDs back to AntibodySequence."""
         decoded = self._tokenizer.decode(token_ids)
 
-        # Parse the decoded string
+        # Parse the decoded string - format is <heavy>|<light> or <heavy>
         parts = decoded.split(self.separator)
-        parts = [p.strip() for p in parts if p.strip()]
+        # Strip whitespace and remove <> brackets from chain sequences
+        parts = [p.strip().strip("<>") for p in parts if p.strip()]
 
         try:
             if original.is_paired and len(parts) >= 2:
@@ -392,15 +381,17 @@ class AbLang2(EncoderAbLM):
     ) -> list[MaskScanOutput]:
         """Scan each position by masking it and collecting predictions."""
         results = []
-        mask_token_id = self._tokenizer.convert_tokens_to_ids(self.mask_token)
-        sep_token_id = self._tokenizer.convert_tokens_to_ids(self.separator)
-        pad_token_id = self._tokenizer.pad_token_id
+        mask_token_id = self._tokenizer.mask_token
+        sep_token_id = self._tokenizer.sep_token
+        pad_token_id = self._tokenizer.pad_token
 
         # Get vocab size from model config or tokenizer
         if hasattr(self._model, "config") and hasattr(self._model.config, "vocab_size"):
             vocab_size = self._model.config.vocab_size
+        elif hasattr(self._tokenizer, "aa_to_token"):
+            vocab_size = len(self._tokenizer.aa_to_token)
         else:
-            vocab_size = self._tokenizer.vocab_size
+            vocab_size = len(self._get_vocab())
 
         for seq in sequences:
             formatted = self._format_for_model([seq])[0]
