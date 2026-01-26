@@ -303,6 +303,103 @@ def _register_all_models() -> None:
     except ImportError:
         pass
 
+    # ESM-2 family models
+    try:
+        from ablms.encoders.esm2 import ESM2
+
+        register_model(
+            ModelConfig(
+                name="esm2-8m",
+                model_class=ESM2,
+                model_id="facebook/esm2_t6_8M_UR50D",
+                supports_paired=False,
+                max_length=1024,
+                embedding_dim=320,
+                mask_token="<mask>",
+                separator=None,
+                has_mlm_head=True,
+                model_type="encoder",
+                extra_kwargs={"model_id": "facebook/esm2_t6_8M_UR50D"},
+            )
+        )
+        register_model(
+            ModelConfig(
+                name="esm2-35m",
+                model_class=ESM2,
+                model_id="facebook/esm2_t12_35M_UR50D",
+                supports_paired=False,
+                max_length=1024,
+                embedding_dim=480,
+                mask_token="<mask>",
+                separator=None,
+                has_mlm_head=True,
+                model_type="encoder",
+                extra_kwargs={"model_id": "facebook/esm2_t12_35M_UR50D"},
+            )
+        )
+        register_model(
+            ModelConfig(
+                name="esm2-150m",
+                model_class=ESM2,
+                model_id="facebook/esm2_t30_150M_UR50D",
+                supports_paired=False,
+                max_length=1024,
+                embedding_dim=640,
+                mask_token="<mask>",
+                separator=None,
+                has_mlm_head=True,
+                model_type="encoder",
+                extra_kwargs={"model_id": "facebook/esm2_t30_150M_UR50D"},
+            )
+        )
+        register_model(
+            ModelConfig(
+                name="esm2-650m",
+                model_class=ESM2,
+                model_id="facebook/esm2_t33_650M_UR50D",
+                supports_paired=False,
+                max_length=1024,
+                embedding_dim=1280,
+                mask_token="<mask>",
+                separator=None,
+                has_mlm_head=True,
+                model_type="encoder",
+                extra_kwargs={"model_id": "facebook/esm2_t33_650M_UR50D"},
+            )
+        )
+        register_model(
+            ModelConfig(
+                name="esm2-3b",
+                model_class=ESM2,
+                model_id="facebook/esm2_t36_3B_UR50D",
+                supports_paired=False,
+                max_length=1024,
+                embedding_dim=2560,
+                mask_token="<mask>",
+                separator=None,
+                has_mlm_head=True,
+                model_type="encoder",
+                extra_kwargs={"model_id": "facebook/esm2_t36_3B_UR50D"},
+            )
+        )
+        register_model(
+            ModelConfig(
+                name="esm2-15b",
+                model_class=ESM2,
+                model_id="facebook/esm2_t48_15B_UR50D",
+                supports_paired=False,
+                max_length=1024,
+                embedding_dim=5120,
+                mask_token="<mask>",
+                separator=None,
+                has_mlm_head=True,
+                model_type="encoder",
+                extra_kwargs={"model_id": "facebook/esm2_t48_15B_UR50D"},
+            )
+        )
+    except ImportError:
+        pass
+
 
 # Register models when module is imported
 _register_all_models()
