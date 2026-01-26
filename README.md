@@ -23,6 +23,7 @@ embeddings = model.get_embeddings(["EVQLVESGGGLVQPGRSLRL..."])
 | **AntiBERTa2** | Encoder | Yes | HuggingFace |
 | **BALM** | Encoder | Yes | HuggingFace |
 | **ft-ESM** | Encoder | Yes | HuggingFace |
+| **ESM-2** | Encoder | No | HuggingFace |
 | **AntiBERTy** | Encoder | No | antiberty package |
 | **AbLang** | Encoder | No | ablang package |
 | **AbLang2** | Encoder | Yes | ablang2 package |
@@ -297,6 +298,7 @@ seq = AntibodySequence(heavy="EVQL<MASK>ESGG")
 # AbLang: *
 # AbLang2: *
 # ft-ESM: <mask>
+# ESM-2: <mask>
 ```
 
 ### Output Classes
@@ -375,7 +377,9 @@ from ablms import list_models
 print(list_models())
 # {'igbert': 'encoder', 'igt5': 'encoder', 'antiberta2': 'encoder',
 #  'balm': 'encoder', 'antiberty': 'encoder', 'ablang': 'encoder',
-#  'ablang2': 'encoder', 'ftesm': 'encoder', 'iglm': 'generative'}
+#  'ablang2': 'encoder', 'ftesm': 'encoder', 'esm2-8m': 'encoder',
+#  'esm2-35m': 'encoder', 'esm2-150m': 'encoder', 'esm2-650m': 'encoder',
+#  'esm2-3b': 'encoder', 'esm2-15b': 'encoder', 'iglm': 'generative'}
 ```
 
 ## Notes on Specific Models
