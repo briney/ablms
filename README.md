@@ -85,7 +85,7 @@ Extract token-level or sequence-level embeddings from any encoder model:
 from ablms import load_model, AntibodySequence
 
 # Load a model
-model = load_model("igbert")
+model = load_model("balm")
 
 # Prepare sequences
 sequences = [
@@ -93,11 +93,12 @@ sequences = [
     AntibodySequence(heavy="QVQLVQSGAEVKKPGASVKVSCKASGYTFT"),
 ]
 
-# Get token-level embeddings (default)
+# Get token-level embeddings
 output = model.get_embeddings(sequences)
 print(output.embeddings.shape)  # [2, seq_len, 768]
 
 # Get sequence-level embeddings with pooling
+# Pooling options are "mean", "max", "cls", "first", and "last" 
 pooled = model.get_embeddings(sequences, pooling="mean")
 print(pooled.embeddings.shape)  # [2, 768]
 ```
@@ -109,7 +110,7 @@ Models that support paired sequences (IgBERT, IgT5, BALM, AbLang2) can process h
 ```python
 from ablms import load_model, AntibodySequence
 
-model = load_model("igbert")  # Supports paired sequences
+model = load_model("balm")  # Supports paired sequences
 
 paired = AntibodySequence(
     heavy="EVQLVESGGGLVQPGRSLRLSCAASGFTFS",
