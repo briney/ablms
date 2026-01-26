@@ -38,6 +38,7 @@ dependencies = [
     "antiberty>=0.0.4",
     "ablang2>=0.1.0",
     "iglm>=0.1.0",
+    "rjieba"  # required for transformers RoFormer model (AntiBERTa2)
 ]
 
 [project.optional-dependencies]
