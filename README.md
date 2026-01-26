@@ -10,8 +10,12 @@ Working with antibody language models often means dealing with different archite
 from ablms import AntibodySequence, load_model
 
 # Same API for any model
-model = load_model("igbert")  # or "antiberty", "ablang2", "iglm", etc.
-embeddings = model.get_embeddings(["EVQLVESGGGLVQPGRSLRL..."])
+model = load_model("balm")  # or "antiberty", "ablang2", "igbert", etc.
+input = AntibodySequence(
+    heavy="EVQLVESGGGLVQPGRSLRLSCAASGFTFS",
+    light="DIQMTQSPSSLSASVGDRVTITCRASQSIS",
+)
+embeddings = model.get_embeddings([input])  # get_embeddings accepts a list of AntibodySequence objects
 ```
 
 ### Supported Models
@@ -75,7 +79,7 @@ print(paired_seq.total_length)   # 60
 
 ### Getting Embeddings
 
-Extract residue-level or sequence-level embeddings from any encoder model:
+Extract token-level or sequence-level embeddings from any encoder model:
 
 ```python
 from ablms import load_model, AntibodySequence
@@ -89,12 +93,12 @@ sequences = [
     AntibodySequence(heavy="QVQLVQSGAEVKKPGASVKVSCKASGYTFT"),
 ]
 
-# Get residue-level embeddings
+# Get token-level embeddings (default)
 output = model.get_embeddings(sequences)
 print(output.embeddings.shape)  # [2, seq_len, 768]
 
 # Get sequence-level embeddings with pooling
-pooled = model.get_sequence_embeddings(sequences, pooling="mean")
+pooled = model.get_embeddings(sequences, pooling="mean")
 print(pooled.embeddings.shape)  # [2, 768]
 ```
 

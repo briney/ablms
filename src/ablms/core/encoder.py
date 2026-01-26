@@ -33,33 +33,47 @@ class EncoderAbLM(BaseAbLM):
         self,
         sequences: str | AntibodySequence | list[str] | list[AntibodySequence],
         layer: int = -1,
+        pooling: str | None = None,
         batch_size: int = 32,
         show_progress: bool = True,
     ) -> EmbeddingOutput:
         """
-        Get token-level embeddings for sequences.
+        Get embeddings for sequences.
 
         Args:
             sequences: Input sequences in various formats.
             layer: Layer index to extract embeddings from (-1 for last layer).
+            pooling: Optional pooling strategy for sequence-level embeddings.
+                If None (default), returns token-level embeddings.
+                Valid options: "mean", "max", "cls", "first", "last".
             batch_size: Batch size for processing (per GPU when using multi-GPU).
             show_progress: Whether to show a progress bar.
 
         Returns:
-            EmbeddingOutput containing token-level embeddings with shape
-            [batch, seq_len, hidden_dim].
+            EmbeddingOutput containing embeddings. Shape is [batch, seq_len, hidden_dim]
+            for token-level (pooling=None) or [batch, hidden_dim] for sequence-level
+            (pooling specified).
         """
         sequences = self._normalize_input(sequences)
         self._validate_input(sequences)
 
         if len(sequences) == 0:
-            return EmbeddingOutput(
-                embeddings=torch.empty(0, 0, self.embedding_dim),
-                attention_mask=None,
-                token_offsets=[],
-                sequences=[],
-                layer=layer,
-            )
+            if pooling is None:
+                return EmbeddingOutput(
+                    embeddings=torch.empty(0, 0, self.embedding_dim),
+                    attention_mask=None,
+                    token_offsets=[],
+                    sequences=[],
+                    layer=layer,
+                )
+            else:
+                return EmbeddingOutput(
+                    embeddings=torch.empty(0, self.embedding_dim),
+                    attention_mask=None,
+                    token_offsets=[],
+                    sequences=[],
+                    layer=layer,
+                )
 
         executor = self._get_executor()
         all_embeddings, all_masks, all_offsets = executor.execute(
@@ -70,6 +84,22 @@ class EncoderAbLM(BaseAbLM):
             progress_desc="Computing embeddings",
             layer=layer,
         )
+
+        # Apply pooling if requested
+        if pooling is not None:
+            pooled = apply_pooling(
+                all_embeddings,
+                strategy=pooling,
+                attention_mask=all_masks,
+            )
+            return EmbeddingOutput(
+                embeddings=pooled,
+                attention_mask=None,
+                token_offsets=all_offsets,
+                pooled=pooled,
+                sequences=sequences,
+                layer=layer,
+            )
 
         return EmbeddingOutput(
             embeddings=all_embeddings,
@@ -107,49 +137,6 @@ class EncoderAbLM(BaseAbLM):
             mask = mask.cpu()
 
         return embeddings, mask, offsets
-
-    def get_sequence_embeddings(
-        self,
-        sequences: str | AntibodySequence | list[str] | list[AntibodySequence],
-        pooling: str = "mean",
-        layer: int = -1,
-        batch_size: int = 32,
-        show_progress: bool = True,
-    ) -> EmbeddingOutput:
-        """
-        Get sequence-level embeddings using pooling.
-
-        Args:
-            sequences: Input sequences in various formats.
-            pooling: Pooling strategy ("mean", "max", "cls", "first", "last").
-            layer: Layer index to extract embeddings from.
-            batch_size: Batch size for processing (per GPU when using multi-GPU).
-            show_progress: Whether to show a progress bar.
-
-        Returns:
-            EmbeddingOutput containing pooled embeddings with shape
-            [batch, hidden_dim].
-        """
-        # Get token-level embeddings first
-        token_output = self.get_embeddings(
-            sequences, layer=layer, batch_size=batch_size, show_progress=show_progress
-        )
-
-        # Apply pooling
-        pooled = apply_pooling(
-            token_output.embeddings,
-            strategy=pooling,
-            attention_mask=token_output.attention_mask,
-        )
-
-        return EmbeddingOutput(
-            embeddings=pooled,
-            attention_mask=None,
-            token_offsets=token_output.token_offsets,
-            pooled=pooled,
-            sequences=token_output.sequences,
-            layer=layer,
-        )
 
     def get_hidden_states(
         self,

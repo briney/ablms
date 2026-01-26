@@ -72,7 +72,7 @@ class EmbeddingOutput:
         if self.is_pooled:
             raise ValueError(
                 "Cannot extract chain embeddings from pooled output. "
-                "Use get_embeddings() instead of get_sequence_embeddings()."
+                "Use get_embeddings() without pooling to get token-level embeddings."
             )
 
         if self.token_offsets is None:
