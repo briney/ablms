@@ -266,9 +266,49 @@ Following the project convention of real models and real data over synthetic fix
 4. **Marker registration.** `slow` is used throughout the suite but never declared in
    `[tool.pytest.ini_options]`, so every run emits `PytestUnknownMarkWarning`. Register it.
 
-## Interim workaround
+## Interim workaround (historical — superseded by the implementation)
 
-Until this lands, the only effective levers avoid the queue entirely: run single-device
+Before this landed, the only effective levers avoided the queue entirely: run single-device
 (`ABLMS_DISABLE_MULTI_GPU=true`, or pass one device explicitly), or restart the container
-with a larger `--shm-size`. Passing `pooling=` does not help today, because the reduction
-happens after concatenation rather than before the queue.
+with a larger `--shm-size`. Passing `pooling=` did not help, because the reduction happened
+after concatenation rather than before the queue. Both are now unnecessary.
+
+## Known limitations
+
+Accepted knowingly during implementation. None blocks the goals above.
+
+**The reorder buffer is bounded by skew, not by dataset size.** `_iter_multi` yields in input
+order, so a slow device pins `next_to_yield` while faster devices keep completing, and the
+`pending` buffer grows. It settles at roughly `skew_ratio x window` rather than at
+`num_workers x window`. This does not affect the `/dev/shm` bound — `pending` holds
+heap-resident clones, and the shared-memory segment is released on receipt — and it is
+strictly better than the pre-change code, which accumulated every result unconditionally. The
+cheap hardening, if it ever bites, is to withhold a replacement submission while `len(pending)`
+exceeds a cap; that throttles the fast worker without new machinery. `mask_scan` has the
+largest natural skew of any caller (`batch_size=1`, highly variable per-batch cost), so it is
+the most likely place to see this.
+
+**AbLang pools on the host, not on the accelerator.** `AbLang._process_mixed_batch` routes
+heavy and light chains through separate model heads and has already transferred to the host by
+the time its override can pool. The payload crossing the queue is still `[B, D]`, so the
+`/dev/shm` fix holds for AbLang; what is lost is the device-to-host transfer reduction and a
+transient host-RAM peak inside the worker. The README and the `get_embeddings` docstring say
+pooling happens "on the model's device", which is true of every encoder except this one.
+
+**The AbLang fix has signature coverage but no execution coverage.** `tests/test_encoder_contract.py`
+asserts every `_process_*_batch` override stays bind-compatible with its base without
+instantiating anything, so it runs everywhere. Actually executing AbLang requires the `ablang`
+package, which is not installed in this environment — its 32 test failures are pre-existing and
+unrelated. Runtime behaviour was verified manually against a stub.
+
+**`tests/test_encoder_contract.py` hardcodes its model list** rather than deriving it from
+`MODEL_REGISTRY`, and inspects only `vars(model_class)`, so it would miss an override defined
+on an intermediate class. A newly added encoder is not covered until someone edits the tuple.
+
+**Two pre-existing AbLang bugs are now adjacent to load-bearing code.** In
+`_process_mixed_batch`, `torch.cat(results, dim=0)` will raise on a genuinely mixed
+heavy/light batch, because the two partitions are tokenized and padded independently; and
+`torch.cat([m for m in masks if m is not None])` would misalign the mask against the
+embeddings if one partition returned a mask and the other did not. Neither can trigger today
+(both partitions go through the same forward path), but the mask is now load-bearing for
+pooling, so an assertion there would be worth adding.
