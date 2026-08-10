@@ -204,3 +204,61 @@ class TestLayerCount:
     def test_matches_the_checkpoint_variant(self, esm2_cpu):
         """The t6 checkpoint has 6 blocks; a hardcoded constant would not track this."""
         assert esm2_cpu.num_layers == 6
+
+
+class TestMultiLayerBatchProcessing:
+    """The layer axis sits at dimension 1, and pooling still reduces per batch."""
+
+    @pytest.mark.slow
+    def test_token_level_stacks_layers(self, esm2_cpu, sequences):
+        embeddings, mask, offsets = esm2_cpu._process_embeddings_batch(
+            sequences, layer=[0, 3, 6], pooling=None
+        )
+
+        assert embeddings.dim() == 4
+        assert embeddings.shape[0] == len(sequences)
+        assert embeddings.shape[1] == 3
+        assert embeddings.shape[3] == esm2_cpu.embedding_dim
+        assert mask is not None
+
+    @pytest.mark.slow
+    def test_pooling_reduces_before_transfer(self, esm2_cpu, sequences):
+        """The [batch, layers, seq, hidden] tensor must never reach the queue."""
+        embeddings, mask, offsets = esm2_cpu._process_embeddings_batch(
+            sequences, layer=[0, 3, 6], pooling="mean"
+        )
+
+        assert embeddings.shape == (len(sequences), 3, esm2_cpu.embedding_dim)
+        assert mask is None
+
+    @pytest.mark.slow
+    def test_each_layer_matches_a_single_layer_call(self, esm2_cpu, sequences):
+        stacked, _, _ = esm2_cpu._process_embeddings_batch(
+            sequences, layer=[0, 3, 6], pooling="mean"
+        )
+
+        for position, layer in enumerate([0, 3, 6]):
+            single, _, _ = esm2_cpu._process_embeddings_batch(
+                sequences, layer=layer, pooling="mean"
+            )
+            assert torch.allclose(stacked[:, position], single, atol=1e-6)
+
+    @pytest.mark.slow
+    def test_single_int_path_is_unchanged(self, esm2_cpu, sequences):
+        """An int layer must not gain a layer axis."""
+        embeddings, _, _ = esm2_cpu._process_embeddings_batch(
+            sequences, layer=-1, pooling=None
+        )
+        assert embeddings.dim() == 3
+
+    @pytest.mark.slow
+    def test_a_wrong_layer_count_is_caught(self, esm2_cpu, sequences, monkeypatch):
+        """A missing num_layers override must fail loudly, not mis-index.
+
+        This is the guard for a newly added encoder whose config does not spell
+        its depth `num_hidden_layers`.
+        """
+        monkeypatch.setattr(type(esm2_cpu), "num_layers", property(lambda self: 99))
+
+        with pytest.raises(RuntimeError, match="num_layers"):
+            esm2_cpu._process_embeddings_batch(sequences, layer=[0, 1], pooling="mean")

@@ -130,7 +130,7 @@ class EncoderAbLM(BaseAbLM):
     def _process_embeddings_batch(
         self,
         sequences: list[AntibodySequence],
-        layer: int = -1,
+        layer: int | list[int] = -1,
         pooling: str | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[dict[str, tuple[int, int]]]]:
         """
@@ -145,26 +145,31 @@ class EncoderAbLM(BaseAbLM):
 
         Args:
             sequences: Batch of sequences (already batched by executor).
-            layer: Layer index to extract embeddings from.
+            layer: A single layer index, or a list of resolved non-negative
+                indices. A list adds a layer axis at dimension 1.
             pooling: Optional pooling strategy applied within this batch.
                 One of "mean", "max", "cls", "first", "last", or None for
                 token-level output.
 
         Returns:
-            Tuple of (embeddings, attention_mask, token_offsets). When pooling
-            is applied, embeddings has shape [batch, hidden_dim] and the mask is
-            None; otherwise embeddings has shape [batch, seq_len, hidden_dim].
+            Tuple of (embeddings, attention_mask, token_offsets). The mask is
+            None whenever pooling was applied. Embeddings are
+            [batch, seq_len, hidden_dim], or [batch, hidden_dim] when pooled;
+            a list `layer` inserts a layer axis at dimension 1.
         """
         formatted = self._format_for_model(sequences)
         tokenized = self._tokenize(formatted)
         offsets = self._compute_token_offsets(sequences, tokenized)
-        embeddings, mask = self._forward_embeddings(tokenized, layer)
 
-        if pooling is not None:
-            embeddings = apply_pooling(
-                embeddings, strategy=pooling, attention_mask=mask
-            )
-            mask = None
+        if isinstance(layer, int):
+            embeddings, mask = self._forward_embeddings(tokenized, layer)
+            if pooling is not None:
+                embeddings = apply_pooling(
+                    embeddings, strategy=pooling, attention_mask=mask
+                )
+                mask = None
+        else:
+            embeddings, mask = self._forward_selected_layers(tokenized, layer, pooling)
 
         # Move results to CPU for cross-process transfer
         embeddings = embeddings.cpu()
@@ -172,6 +177,59 @@ class EncoderAbLM(BaseAbLM):
             mask = mask.cpu()
 
         return embeddings, mask, offsets
+
+    def _forward_selected_layers(
+        self,
+        tokenized: dict[str, torch.Tensor],
+        layers: list[int],
+        pooling: str | None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """
+        Stack several layers, pooling each one before it is stacked.
+
+        Every encoder already implements `_forward_all_hidden_states`, and the
+        HuggingFace-backed ones compute every layer regardless, so selecting
+        from its output costs nothing over a single-layer forward pass.
+
+        Pooling per layer rather than after stacking means the
+        [batch, layers, seq_len, hidden_dim] tensor is never allocated on
+        pooled runs - only [batch, layers, hidden_dim] survives to cross the
+        result queue. See the "reduce before transfer" note in CLAUDE.md.
+
+        Args:
+            tokenized: Tokenized batch.
+            layers: Resolved non-negative indices, in the order requested.
+            pooling: Optional pooling strategy, applied to each layer.
+
+        Returns:
+            Tuple of (embeddings, attention_mask). Embeddings are
+            [batch, len(layers), hidden_dim] when pooled, else
+            [batch, len(layers), seq_len, hidden_dim]. The mask is None
+            whenever pooling was applied.
+
+        Raises:
+            RuntimeError: If the model's reported num_layers disagrees with the
+                number of hidden states its forward pass returned.
+        """
+        hidden_states, mask = self._forward_all_hidden_states(tokenized)
+
+        expected = self.num_layers + 1
+        if len(hidden_states) != expected:
+            raise RuntimeError(
+                f"{self.model_name} reports num_layers={self.num_layers} "
+                f"({expected} selectable layers), but its forward pass returned "
+                f"{len(hidden_states)} hidden states. The num_layers property "
+                f"needs an override for this model."
+            )
+
+        if pooling is not None:
+            pooled = [
+                apply_pooling(hidden_states[i], strategy=pooling, attention_mask=mask)
+                for i in layers
+            ]
+            return torch.stack(pooled, dim=1), None
+
+        return torch.stack([hidden_states[i] for i in layers], dim=1), mask
 
     def iter_embeddings(
         self,
