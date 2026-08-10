@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import dataclasses
 import queue
 from collections.abc import Iterator
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.multiprocessing as mp
 
-from ablms.parallel.worker import WorkerHandle
 from ablms.parallel.utils import DEFAULT_SUBMISSION_WINDOW, WORKER_TIMEOUT
+from ablms.parallel.worker import WorkerHandle
 
 if TYPE_CHECKING:
     from ablms.core.base import BaseAbLM
@@ -29,8 +30,8 @@ def _detach_from_shm(obj: Any) -> Any:
     the data into ordinary heap memory so the segment can be released.
 
     Args:
-        obj: A value received from a worker: a tensor, or a tuple/list that may
-            contain tensors, or anything else.
+        obj: A value received from a worker: a tensor, a tuple/list/dataclass
+            that may contain tensors, or anything else.
 
     Returns:
         The same structure with every tensor replaced by a heap-backed clone.
@@ -42,6 +43,17 @@ def _detach_from_shm(obj: Any) -> Any:
         return tuple(_detach_from_shm(item) for item in obj)
     if isinstance(obj, list):
         return [_detach_from_shm(item) for item in obj]
+    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        # Output containers such as MaskScanOutput hold their tensors as
+        # attributes, so recursing into fields is the only way to reach them.
+        return dataclasses.replace(
+            obj,
+            **{
+                f.name: _detach_from_shm(getattr(obj, f.name))
+                for f in dataclasses.fields(obj)
+                if f.init
+            },
+        )
     return obj
 
 
@@ -294,8 +306,16 @@ class MultiGPUExecutor:
 
         At most `num_workers * submission_window` batches are outstanding at any
         moment. Each completed batch releases exactly one new submission, sent
-        back to the worker that just reported in - which both bounds shared
-        memory use and balances load toward whichever device is keeping up.
+        back to the worker that just reported in - which balances load toward
+        whichever device is keeping up.
+
+        The window bounds the number of *outstanding* results, and therefore how
+        much shared memory is live at once; it does not bound total host memory.
+        Results arriving out of order are held in a reorder buffer until the
+        batch before them lands, and that buffer grows with inter-device skew: a
+        single slow batch pins the yield cursor while every other worker keeps
+        completing. Buffered results are heap-resident clones, not shared
+        memory, so this does not reintroduce the /dev/shm problem.
         """
         from tqdm.auto import tqdm
 
@@ -338,10 +358,14 @@ class MultiGPUExecutor:
                         timeout=WORKER_TIMEOUT
                     )
                 except queue.Empty:
-                    raise self._stalled_error() from None
+                    error = self._stalled_error()
+                    # The workers are gone, so nothing is left to reclaim.
+                    task_worker.clear()
+                    raise error from None
 
                 if msg_type in ("error", "fatal"):
                     self._shutdown_workers_fast()
+                    task_worker.clear()
                     raise WorkerError(
                         worker_id=data["worker_id"],
                         original_error=data["exception"],
@@ -363,6 +387,30 @@ class MultiGPUExecutor:
                     next_to_yield += 1
         finally:
             pbar.close()
+            self._drain_outstanding(len(task_worker))
+
+    def _drain_outstanding(self, count: int) -> None:
+        """
+        Discard results for tasks that are still in flight.
+
+        A consumer that abandons the generator partway - by breaking out of the
+        loop, or via `close()` - leaves the tasks currently inside the window
+        running. Their results would otherwise sit unread in the shared result
+        queue, holding shared memory and, worse, being mistaken for this run's
+        results by the next call. `count` is bounded by
+        `num_workers * submission_window`, so this always terminates.
+
+        Args:
+            count: Number of results still expected from the workers.
+        """
+        for _ in range(count):
+            try:
+                self._result_queue.get(timeout=WORKER_TIMEOUT)
+            except (queue.Empty, OSError, ValueError):
+                # Nothing arrived within the timeout, or the queue is already
+                # torn down. Either way there is nothing left to reclaim, and
+                # this runs in a `finally` - it must not mask the real error.
+                break
 
     def _stalled_error(self) -> Exception:
         """Build the error raised when no worker reports within the timeout."""

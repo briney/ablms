@@ -1,10 +1,23 @@
 """Tests for the multi-GPU executor's memory and ordering behavior."""
 
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
 import pytest
 import torch
 
 from ablms.parallel.executor import MultiGPUExecutor, _detach_from_shm
 from tests.fake_worker_model import FakeWorkerModel
+
+
+@dataclass
+class _FakeScanOutput:
+    """Stands in for MaskScanOutput: a dataclass holding tensors as attributes."""
+
+    logits: torch.Tensor
+    token_ids: torch.Tensor
+    vocab: dict[str, int] | None = field(default=None, repr=False)
 
 
 class TestDetachFromShm:
@@ -42,6 +55,42 @@ class TestDetachFromShm:
     def test_non_tensor_passes_through(self):
         assert _detach_from_shm([1.0, 2.0]) == [1.0, 2.0]
         assert _detach_from_shm("scores") == "scores"
+
+    def test_dataclass_fields_are_detached(self):
+        """Covers MaskScanOutput, which holds its tensors as attributes."""
+        original = _FakeScanOutput(
+            logits=torch.randn(5, 20).share_memory_(),
+            token_ids=torch.arange(5).share_memory_(),
+            vocab={"A": 0},
+        )
+
+        detached = _detach_from_shm(original)
+
+        assert isinstance(detached, _FakeScanOutput)
+        assert not detached.logits.is_shared()
+        assert not detached.token_ids.is_shared()
+        assert torch.equal(detached.logits, original.logits)
+        assert detached.vocab == {"A": 0}
+
+    def test_dataclass_inside_a_list_is_detached(self):
+        """mask_scan returns list[MaskScanOutput], so the list path must recurse."""
+        results = [
+            _FakeScanOutput(
+                logits=torch.randn(3, 4).share_memory_(),
+                token_ids=torch.arange(3).share_memory_(),
+            )
+            for _ in range(2)
+        ]
+
+        detached = _detach_from_shm(results)
+
+        assert len(detached) == 2
+        assert all(not r.logits.is_shared() for r in detached)
+        assert all(not r.token_ids.is_shared() for r in detached)
+
+    def test_dataclass_type_passes_through(self):
+        """A class object is a dataclass too, but must not be instantiated."""
+        assert _detach_from_shm(_FakeScanOutput) is _FakeScanOutput
 
 
 def _cpu_executor(num_workers: int) -> MultiGPUExecutor:
@@ -126,3 +175,35 @@ class TestExecuteIterOrdering:
 
         distinct_pids = set(combined[:, 1].tolist())
         assert len(distinct_pids) == 2
+
+    @pytest.mark.slow
+    def test_executor_is_reusable_after_abandoning_the_generator(self):
+        """An abandoned generator must not poison the next call on the executor.
+
+        Closing the generator leaves the tasks inside the window still running.
+        If their results are left unread on the shared queue, the next call
+        picks them up as its own and fails on the unknown task id.
+        """
+        executor = _cpu_executor(2)
+        try:
+            gen = executor.execute_iter(
+                method_name="_process_echo_batch",
+                sequences=list(range(40)),
+                batch_size=2,
+                show_progress=False,
+            )
+            first_idx, _ = next(gen)
+            assert first_idx == 0
+            gen.close()
+
+            combined, _, offsets = executor.execute(
+                method_name="_process_echo_batch",
+                sequences=list(range(6)),
+                batch_size=2,
+                show_progress=False,
+            )
+        finally:
+            executor.shutdown()
+
+        assert torch.equal(combined[:, 0], torch.arange(6, dtype=torch.float32))
+        assert len(offsets) == 6
