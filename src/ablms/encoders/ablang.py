@@ -10,6 +10,7 @@ from ablms.core.encoder import EncoderAbLM
 from ablms.core.sequence import AntibodySequence
 from ablms.exceptions import ModelLoadError
 from ablms.outputs import MaskScanOutput
+from ablms.utils.pooling import apply_pooling
 
 
 class AbLang(EncoderAbLM):
@@ -179,14 +180,46 @@ class AbLang(EncoderAbLM):
         self,
         sequences: list[AntibodySequence],
         layer: int = -1,
+        pooling: str | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[dict[str, tuple[int, int]]]]:
-        """Process a batch of sequences for embeddings, handling mixed chain types."""
-        return self._process_mixed_batch(
+        """
+        Process a batch of sequences for embeddings, handling mixed chain types.
+
+        The signature must stay bind-compatible with
+        `EncoderAbLM._process_embeddings_batch`: the executor forwards
+        `pooling` through `**method_kwargs` for every model.
+
+        Pooling is applied to the merged heavy/light result, using the merged
+        attention mask, so the reduction happens before the tensor is handed to
+        the inter-process queue - which is what keeps the transfer small.
+
+        Args:
+            sequences: Batch of sequences (already batched by executor).
+            layer: Layer index to extract embeddings from (ignored by AbLang,
+                which only exposes its final layer).
+            pooling: Optional pooling strategy applied within this batch.
+                One of "mean", "max", "cls", "first", "last", or None for
+                token-level output.
+
+        Returns:
+            Tuple of (embeddings, attention_mask, token_offsets). When pooling
+            is applied, embeddings has shape [batch, hidden_dim] and the mask is
+            None; otherwise embeddings has shape [batch, seq_len, hidden_dim].
+        """
+        embeddings, mask, offsets = self._process_mixed_batch(
             sequences,
             process_fn=lambda seqs, model: self._forward_embeddings_with_model(
                 seqs, model, layer
             ),
         )
+
+        if pooling is not None:
+            embeddings = apply_pooling(
+                embeddings, strategy=pooling, attention_mask=mask
+            )
+            mask = None
+
+        return embeddings, mask, offsets
 
     def _process_hidden_states_batch(
         self,

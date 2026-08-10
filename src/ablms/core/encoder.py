@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import Any
+from collections.abc import Iterator
 
 import torch
 
@@ -44,7 +44,9 @@ class EncoderAbLM(BaseAbLM):
             sequences: Input sequences in various formats.
             layer: Layer index to extract embeddings from (-1 for last layer).
             pooling: Optional pooling strategy for sequence-level embeddings.
-                If None (default), returns token-level embeddings.
+                If None (default), returns token-level embeddings. Pooling is
+                applied within each batch on the model's device, so pooled runs
+                never materialize the full token-level tensor.
                 Valid options: "mean", "max", "cls", "first", "last".
             batch_size: Batch size for processing (per GPU when using multi-GPU).
             show_progress: Whether to show a progress bar.
@@ -83,20 +85,16 @@ class EncoderAbLM(BaseAbLM):
             show_progress=show_progress,
             progress_desc="Computing embeddings",
             layer=layer,
+            pooling=pooling,
         )
 
-        # Apply pooling if requested
         if pooling is not None:
-            pooled = apply_pooling(
-                all_embeddings,
-                strategy=pooling,
-                attention_mask=all_masks,
-            )
+            # Already reduced per batch; all_embeddings is [total, hidden_dim].
             return EmbeddingOutput(
-                embeddings=pooled,
+                embeddings=all_embeddings,
                 attention_mask=None,
                 token_offsets=all_offsets,
-                pooled=pooled,
+                pooled=all_embeddings,
                 sequences=sequences,
                 layer=layer,
             )
@@ -113,23 +111,40 @@ class EncoderAbLM(BaseAbLM):
         self,
         sequences: list[AntibodySequence],
         layer: int = -1,
+        pooling: str | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[dict[str, tuple[int, int]]]]:
         """
         Process a single batch of sequences for embeddings.
 
         This method is called by workers and should NOT be parallelized further.
 
+        Pooling is applied on the model's device, before the result is moved to
+        the host. This keeps the large [batch, seq_len, hidden_dim] tensor off
+        the host entirely and out of the inter-process queue, which is what
+        makes large multi-GPU runs viable.
+
         Args:
             sequences: Batch of sequences (already batched by executor).
             layer: Layer index to extract embeddings from.
+            pooling: Optional pooling strategy applied within this batch.
+                One of "mean", "max", "cls", "first", "last", or None for
+                token-level output.
 
         Returns:
-            Tuple of (embeddings, attention_mask, token_offsets).
+            Tuple of (embeddings, attention_mask, token_offsets). When pooling
+            is applied, embeddings has shape [batch, hidden_dim] and the mask is
+            None; otherwise embeddings has shape [batch, seq_len, hidden_dim].
         """
         formatted = self._format_for_model(sequences)
         tokenized = self._tokenize(formatted)
         offsets = self._compute_token_offsets(sequences, tokenized)
         embeddings, mask = self._forward_embeddings(tokenized, layer)
+
+        if pooling is not None:
+            embeddings = apply_pooling(
+                embeddings, strategy=pooling, attention_mask=mask
+            )
+            mask = None
 
         # Move results to CPU for cross-process transfer
         embeddings = embeddings.cpu()
@@ -137,6 +152,89 @@ class EncoderAbLM(BaseAbLM):
             mask = mask.cpu()
 
         return embeddings, mask, offsets
+
+    def iter_embeddings(
+        self,
+        sequences: str | AntibodySequence | list[str] | list[AntibodySequence],
+        layer: int = -1,
+        pooling: str | None = None,
+        batch_size: int = 32,
+        show_progress: bool = True,
+    ) -> Iterator[EmbeddingOutput]:
+        """
+        Stream embeddings one batch at a time.
+
+        Unlike get_embeddings(), nothing is accumulated: each batch is yielded
+        as soon as it is ready and released once the caller is done with it.
+        Use this when the full token-level output for the dataset would not fit
+        in memory, writing each batch to HDF5, zarr, or npy as it arrives.
+
+        Args:
+            sequences: Input sequences in various formats.
+            layer: Layer index to extract embeddings from (-1 for last layer).
+            pooling: Optional pooling strategy applied within each batch.
+                Valid options: "mean", "max", "cls", "first", "last".
+            batch_size: Batch size for processing (per GPU when using multi-GPU).
+            show_progress: Whether to show a progress bar.
+
+        Yields:
+            One EmbeddingOutput per batch, in input order. Each carries its own
+            slice of the input sequences and its own token offsets, so batches
+            are self-describing.
+
+        Raises:
+            PairedSequenceError: If paired sequences are provided but the model
+                does not support them.
+            SequenceTooLongError: If a sequence exceeds the model's max length.
+
+        Example:
+            >>> for batch in model.iter_embeddings(sequences, pooling="mean"):
+            ...     writer.append(batch.embeddings.numpy())
+        """
+        # Validate eagerly rather than on first next(), so bad input fails at
+        # the call site.
+        sequences = self._normalize_input(sequences)
+        self._validate_input(sequences)
+
+        return self._iter_embeddings(
+            sequences=sequences,
+            layer=layer,
+            pooling=pooling,
+            batch_size=batch_size,
+            show_progress=show_progress,
+        )
+
+    def _iter_embeddings(
+        self,
+        sequences: list[AntibodySequence],
+        layer: int,
+        pooling: str | None,
+        batch_size: int,
+        show_progress: bool,
+    ) -> Iterator[EmbeddingOutput]:
+        """Generator backing iter_embeddings(); assumes validated input."""
+        if not sequences:
+            return
+
+        executor = self._get_executor()
+        for batch_idx, (embeddings, mask, offsets) in executor.execute_iter(
+            method_name="_process_embeddings_batch",
+            sequences=sequences,
+            batch_size=batch_size,
+            show_progress=show_progress,
+            progress_desc="Computing embeddings",
+            layer=layer,
+            pooling=pooling,
+        ):
+            start = batch_idx * batch_size
+            yield EmbeddingOutput(
+                embeddings=embeddings,
+                attention_mask=mask,
+                token_offsets=offsets,
+                pooled=embeddings if pooling is not None else None,
+                sequences=sequences[start : start + batch_size],
+                layer=layer,
+            )
 
     def get_hidden_states(
         self,
@@ -188,7 +286,9 @@ class EncoderAbLM(BaseAbLM):
     def _process_hidden_states_batch(
         self,
         sequences: list[AntibodySequence],
-    ) -> tuple[list[torch.Tensor], torch.Tensor | None, list[dict[str, tuple[int, int]]]]:
+    ) -> tuple[
+        list[torch.Tensor], torch.Tensor | None, list[dict[str, tuple[int, int]]]
+    ]:
         """
         Process a single batch for hidden states from all layers.
 

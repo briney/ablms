@@ -101,6 +101,10 @@ print(output.embeddings.shape)  # [2, seq_len, 768]
 # Pooling options are "mean", "max", "cls", "first", and "last" 
 pooled = model.get_embeddings(sequences, pooling="mean")
 print(pooled.embeddings.shape)  # [2, 768]
+
+# Stream batches instead of accumulating, for datasets larger than memory
+for batch in model.iter_embeddings(sequences, pooling="mean", batch_size=64):
+    ...  # batch is an EmbeddingOutput covering just this batch
 ```
 
 ### Working with Paired Sequences
@@ -364,7 +368,51 @@ Key features:
 - **Automatic detection**: Uses all available GPUs by default
 - **Lazy initialization**: Worker processes spawn on first inference call
 - **Single-GPU optimization**: No subprocess overhead when using one device
+- **Bounded in-flight memory**: At most a few batches per GPU are in flight at
+  once, so shared memory use does not grow with dataset size. The result
+  `get_embeddings()` returns is still proportional to the dataset - use
+  `iter_embeddings()` when that is the constraint
 - **Progress tracking**: Built-in tqdm progress bar for all inference methods
+
+#### Large datasets
+
+Results travel from worker processes to the parent through shared memory
+(`/dev/shm`), so what matters for very large runs is how much each batch
+carries. Two things keep that bounded.
+
+**Pool inside the batch.** When you pass `pooling=`, the reduction happens on
+the GPU before the batch is transferred, so the full token-level tensor is
+never materialized:
+
+```python
+# Each batch transfers [batch_size, hidden_dim], not
+# [batch_size, seq_len, hidden_dim] - roughly 250x smaller at typical lengths.
+embeddings = model.get_embeddings(sequences, pooling="mean", batch_size=64)
+```
+
+**Stream token-level output.** When you need per-residue embeddings for more
+sequences than fit in memory, `iter_embeddings()` yields one batch at a time,
+in input order, and retains nothing:
+
+```python
+import h5py
+
+with h5py.File("embeddings.h5", "w") as f:
+    for i, batch in enumerate(model.iter_embeddings(sequences, batch_size=64)):
+        for j, tokens in enumerate(batch):  # iterating strips padding
+            f.create_dataset(f"seq_{i * 64 + j}", data=tokens.numpy())
+```
+
+If a run still exhausts shared memory, `ablms` raises `SharedMemoryError` with
+the current `/dev/shm` free space and suggested remedies. Inside a container the
+usual cause is Docker's 64 MB default; raise it with `--shm-size=8g`.
+
+Two environment variables tune this:
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `ABLMS_SUBMISSION_WINDOW` | `2` | Batches in flight per GPU. Lower to reduce shared memory use, raise to hide scheduling latency. |
+| `ABLMS_WORKER_TIMEOUT` | `300` | Seconds to wait for a batch before failing. Raises `SharedMemoryError` if every worker is still alive, or `MultiGPUError` if a worker has died. |
 
 Disable the progress bar for cleaner output in scripts:
 
