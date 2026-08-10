@@ -262,3 +262,158 @@ class TestMultiLayerBatchProcessing:
 
         with pytest.raises(RuntimeError, match="num_layers"):
             esm2_cpu._process_embeddings_batch(sequences, layer=[0, 1], pooling="mean")
+
+
+class TestMultiLayerGetEmbeddings:
+    """The public API: layer accepts an int, a list, or "all"."""
+
+    @pytest.mark.slow
+    def test_default_call_is_unchanged(self, esm2_cpu, sequences):
+        output = esm2_cpu.get_embeddings(sequences, show_progress=False)
+
+        assert output.embeddings.dim() == 3
+        assert not output.is_multi_layer
+        assert output.layer == -1
+        assert output.layers is None
+
+    @pytest.mark.slow
+    def test_all_layers_pooled(self, esm2_cpu, sequences):
+        output = esm2_cpu.get_embeddings(
+            sequences, layer="all", pooling="cls", batch_size=2, show_progress=False
+        )
+
+        assert output.is_multi_layer
+        assert output.layers == list(range(esm2_cpu.num_layers + 1))
+        assert output.layer is None
+        assert output.is_pooled
+        assert output.embeddings.shape == (
+            len(sequences),
+            esm2_cpu.num_layers + 1,
+            esm2_cpu.embedding_dim,
+        )
+
+    @pytest.mark.slow
+    def test_concat_layers_gives_one_vector_per_sequence(self, esm2_cpu, sequences):
+        """The dimensionality-reduction use case."""
+        output = esm2_cpu.get_embeddings(
+            sequences, layer="all", pooling="cls", show_progress=False
+        )
+        features = output.concat_layers()
+
+        assert features.shape == (
+            len(sequences),
+            (esm2_cpu.num_layers + 1) * esm2_cpu.embedding_dim,
+        )
+
+    @pytest.mark.slow
+    def test_explicit_list_preserves_order(self, esm2_cpu, sequences):
+        output = esm2_cpu.get_embeddings(
+            sequences, layer=[6, 0], pooling="mean", show_progress=False
+        )
+        assert output.layers == [6, 0]
+
+    @pytest.mark.slow
+    def test_get_layer_matches_a_single_layer_call(self, esm2_cpu, sequences):
+        multi = esm2_cpu.get_embeddings(
+            sequences, layer=[0, 3, 6], pooling="mean", show_progress=False
+        )
+        single = esm2_cpu.get_embeddings(
+            sequences, layer=3, pooling="mean", show_progress=False
+        )
+
+        assert torch.allclose(multi.get_layer(3), single.embeddings, atol=1e-6)
+
+    @pytest.mark.slow
+    def test_single_element_list_keeps_the_layer_axis(self, esm2_cpu, sequences):
+        """The argument's type decides the shape, not its length."""
+        listed = esm2_cpu.get_embeddings(
+            sequences, layer=[-1], pooling="mean", show_progress=False
+        )
+        scalar = esm2_cpu.get_embeddings(
+            sequences, layer=-1, pooling="mean", show_progress=False
+        )
+
+        assert listed.embeddings.shape == (len(sequences), 1, esm2_cpu.embedding_dim)
+        assert torch.allclose(listed.embeddings[:, 0], scalar.embeddings, atol=1e-6)
+
+    @pytest.mark.slow
+    def test_ragged_multi_batch_token_level_concatenates(
+        self, esm2_cpu, ragged_sequences
+    ):
+        """Batches padded to different lengths must concatenate across the layer axis.
+
+        This is the case that fails if _pad_tensors_to_max_length assumes
+        dimension 1 is the sequence axis.
+        """
+        output = esm2_cpu.get_embeddings(
+            ragged_sequences,
+            layer=[0, 3],
+            pooling=None,
+            batch_size=2,
+            show_progress=False,
+        )
+        n = len(ragged_sequences)
+        max_len = output.embeddings.shape[2]
+
+        assert output.embeddings.shape == (n, 2, max_len, esm2_cpu.embedding_dim)
+        assert output.attention_mask.shape == (n, max_len)
+
+    @pytest.mark.slow
+    def test_invalid_layer_fails_at_the_call_site(self, esm2_cpu, sequences):
+        with pytest.raises(ValueError, match="out of range"):
+            esm2_cpu.get_embeddings(sequences, layer=999, show_progress=False)
+
+    @pytest.mark.slow
+    def test_empty_input_reports_the_layer_axis(self, esm2_cpu):
+        output = esm2_cpu.get_embeddings([], layer="all", pooling="mean")
+
+        assert output.layers == list(range(esm2_cpu.num_layers + 1))
+        assert output.embeddings.shape == (
+            0,
+            esm2_cpu.num_layers + 1,
+            esm2_cpu.embedding_dim,
+        )
+
+
+class TestMultiLayerIterEmbeddings:
+    @pytest.mark.slow
+    def test_each_batch_carries_its_layers(self, esm2_cpu, sequences):
+        outputs = list(
+            esm2_cpu.iter_embeddings(
+                sequences,
+                layer=[0, 3],
+                pooling="mean",
+                batch_size=2,
+                show_progress=False,
+            )
+        )
+
+        assert len(outputs) == 3
+        assert all(o.layers == [0, 3] for o in outputs)
+        assert outputs[0].embeddings.shape == (2, 2, esm2_cpu.embedding_dim)
+
+    @pytest.mark.slow
+    def test_stream_matches_get_embeddings(self, esm2_cpu, sequences):
+        streamed = torch.cat(
+            [
+                o.embeddings
+                for o in esm2_cpu.iter_embeddings(
+                    sequences,
+                    layer="all",
+                    pooling="mean",
+                    batch_size=2,
+                    show_progress=False,
+                )
+            ]
+        )
+        combined = esm2_cpu.get_embeddings(
+            sequences, layer="all", pooling="mean", batch_size=2, show_progress=False
+        )
+
+        assert torch.allclose(streamed, combined.embeddings, atol=1e-6)
+
+    @pytest.mark.slow
+    def test_invalid_layer_fails_eagerly(self, esm2_cpu, sequences):
+        """Like sequence validation, this must raise on call, not on first next()."""
+        with pytest.raises(ValueError, match="out of range"):
+            esm2_cpu.iter_embeddings(sequences, layer=999, show_progress=False)
