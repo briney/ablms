@@ -203,8 +203,7 @@ class MultiGPUExecutor:
 
         # Create batches
         batches = [
-            sequences[i : i + batch_size]
-            for i in range(0, len(sequences), batch_size)
+            sequences[i : i + batch_size] for i in range(0, len(sequences), batch_size)
         ]
 
         desc = progress_desc or "Processing"
@@ -269,9 +268,7 @@ class MultiGPUExecutor:
 
         try:
             while len(results) < task_count:
-                msg_type, task_id, data = self._result_queue.get(
-                    timeout=WORKER_TIMEOUT
-                )
+                msg_type, task_id, data = self._result_queue.get(timeout=WORKER_TIMEOUT)
 
                 if msg_type == "result":
                     batch_idx = task_to_batch_idx[task_id]
@@ -386,12 +383,17 @@ class MultiGPUExecutor:
         zeros to match the maximum sequence length across all tensors.
 
         Args:
-            tensors: List of tensors to pad.
+            tensors: List of tensors to pad. Tensors with fewer than three
+                dimensions (e.g. pooled [batch, hidden] results) have no
+                sequence axis and are returned unchanged.
 
         Returns:
-            List of tensors with uniform sequence length (dimension 1).
+            List of tensors with uniform sequence length (dimension 1), or the
+            input unchanged if the tensors have fewer than three dimensions.
         """
-        if not tensors or tensors[0].dim() < 2:
+        if not tensors or tensors[0].dim() < 3:
+            # Nothing to pad: 1-D and 2-D results (e.g. pooled [batch, hidden])
+            # have no sequence axis. Only [batch, seq, ...] tensors are padded.
             return tensors
 
         max_seq_len = max(t.shape[1] for t in tensors)
@@ -409,9 +411,7 @@ class MultiGPUExecutor:
             padded.append(t)
         return padded
 
-    def _combine_tuple_results(
-        self, results: list[tuple[Any, ...]]
-    ) -> tuple[Any, ...]:
+    def _combine_tuple_results(self, results: list[tuple[Any, ...]]) -> tuple[Any, ...]:
         """Combine tuple results element-wise."""
         num_elements = len(results[0])
         combined = []

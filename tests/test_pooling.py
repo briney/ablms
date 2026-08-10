@@ -142,3 +142,28 @@ class TestApplyPooling:
         embeddings = torch.ones(2, 10, 768)
         pooled = apply_pooling(embeddings, "MEAN")
         assert pooled.shape == torch.Size([2, 768])
+
+
+class TestPoolingIsPaddingInvariant:
+    """Pooling a batch alone must equal pooling it inside a longer padded stack.
+
+    This is what makes it safe to pool per batch rather than after all batches
+    have been concatenated and padded to a global maximum length.
+    """
+
+    @pytest.mark.parametrize("strategy", ["mean", "max", "cls", "first", "last"])
+    def test_extra_right_padding_does_not_change_result(self, strategy):
+        torch.manual_seed(0)
+        batch, real_len, hidden, extra = 3, 7, 16, 11
+
+        embeddings = torch.randn(batch, real_len, hidden)
+        mask = torch.ones(batch, real_len)
+        mask[1, 5:] = 0  # a shorter sequence in the batch
+
+        padded = torch.cat([embeddings, torch.zeros(batch, extra, hidden)], dim=1)
+        padded_mask = torch.cat([mask, torch.zeros(batch, extra)], dim=1)
+
+        tight = apply_pooling(embeddings, strategy, mask)
+        loose = apply_pooling(padded, strategy, padded_mask)
+
+        assert torch.allclose(tight, loose, atol=1e-6)

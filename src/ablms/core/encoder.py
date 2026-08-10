@@ -44,7 +44,9 @@ class EncoderAbLM(BaseAbLM):
             sequences: Input sequences in various formats.
             layer: Layer index to extract embeddings from (-1 for last layer).
             pooling: Optional pooling strategy for sequence-level embeddings.
-                If None (default), returns token-level embeddings.
+                If None (default), returns token-level embeddings. Pooling is
+                applied within each batch on the model's device, so pooled runs
+                never materialize the full token-level tensor.
                 Valid options: "mean", "max", "cls", "first", "last".
             batch_size: Batch size for processing (per GPU when using multi-GPU).
             show_progress: Whether to show a progress bar.
@@ -83,20 +85,16 @@ class EncoderAbLM(BaseAbLM):
             show_progress=show_progress,
             progress_desc="Computing embeddings",
             layer=layer,
+            pooling=pooling,
         )
 
-        # Apply pooling if requested
         if pooling is not None:
-            pooled = apply_pooling(
-                all_embeddings,
-                strategy=pooling,
-                attention_mask=all_masks,
-            )
+            # Already reduced per batch; all_embeddings is [total, hidden_dim].
             return EmbeddingOutput(
-                embeddings=pooled,
+                embeddings=all_embeddings,
                 attention_mask=None,
                 token_offsets=all_offsets,
-                pooled=pooled,
+                pooled=all_embeddings,
                 sequences=sequences,
                 layer=layer,
             )
@@ -113,23 +111,40 @@ class EncoderAbLM(BaseAbLM):
         self,
         sequences: list[AntibodySequence],
         layer: int = -1,
+        pooling: str | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[dict[str, tuple[int, int]]]]:
         """
         Process a single batch of sequences for embeddings.
 
         This method is called by workers and should NOT be parallelized further.
 
+        Pooling is applied on the model's device, before the result is moved to
+        the host. This keeps the large [batch, seq_len, hidden_dim] tensor off
+        the host entirely and out of the inter-process queue, which is what
+        makes large multi-GPU runs viable.
+
         Args:
             sequences: Batch of sequences (already batched by executor).
             layer: Layer index to extract embeddings from.
+            pooling: Optional pooling strategy applied within this batch.
+                One of "mean", "max", "cls", "first", "last", or None for
+                token-level output.
 
         Returns:
-            Tuple of (embeddings, attention_mask, token_offsets).
+            Tuple of (embeddings, attention_mask, token_offsets). When pooling
+            is applied, embeddings has shape [batch, hidden_dim] and the mask is
+            None; otherwise embeddings has shape [batch, seq_len, hidden_dim].
         """
         formatted = self._format_for_model(sequences)
         tokenized = self._tokenize(formatted)
         offsets = self._compute_token_offsets(sequences, tokenized)
         embeddings, mask = self._forward_embeddings(tokenized, layer)
+
+        if pooling is not None:
+            embeddings = apply_pooling(
+                embeddings, strategy=pooling, attention_mask=mask
+            )
+            mask = None
 
         # Move results to CPU for cross-process transfer
         embeddings = embeddings.cpu()
@@ -188,7 +203,9 @@ class EncoderAbLM(BaseAbLM):
     def _process_hidden_states_batch(
         self,
         sequences: list[AntibodySequence],
-    ) -> tuple[list[torch.Tensor], torch.Tensor | None, list[dict[str, tuple[int, int]]]]:
+    ) -> tuple[
+        list[torch.Tensor], torch.Tensor | None, list[dict[str, tuple[int, int]]]
+    ]:
         """
         Process a single batch for hidden states from all layers.
 
