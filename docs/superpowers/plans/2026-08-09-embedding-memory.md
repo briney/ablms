@@ -72,7 +72,6 @@ The core fix. `_process_embeddings_batch` gains a `pooling` parameter and applie
 
 **Files:**
 - Modify: `src/ablms/core/encoder.py:32-139` (`get_embeddings` and `_process_embeddings_batch`)
-- Modify: `src/ablms/parallel/executor.py:378-410` (`_pad_tensors_to_max_length`)
 - Test: `tests/test_pooling.py` (append a new class)
 - Test: `tests/test_embedding_memory.py` (create)
 
@@ -328,18 +327,13 @@ Also update the `pooling` argument's docstring in `get_embeddings` to record the
                 Valid options: "mean", "max", "cls", "first", "last".
 ```
 
-- [ ] **Step 10: Fix `_pad_tensors_to_max_length` to skip reduced results**
+- [ ] **Step 10: WITHDRAWN — leave `_pad_tensors_to_max_length` exactly as it is**
 
-Pooled batches are `[B, D]`. Today they survive `_pad_tensors_to_max_length` only because `hidden_dim` is constant across batches, so the computed max equals `D` and no padding happens. Make that explicit. In `src/ablms/parallel/executor.py`, replace the guard at line 394-395:
+This step originally asked for the guard at `executor.py:394` to change from `dim() < 2` to `dim() < 3`, to make "explicit" the fact that pooled `[B, D]` tensors need no padding. **That was a defect in this plan. Do not make the change.** It was implemented, caught in review, reproduced, and reverted on 2026-08-09.
 
-```python
-        if not tensors or tensors[0].dim() < 3:
-            # Nothing to pad: 1-D and 2-D results (e.g. pooled [batch, hidden])
-            # have no sequence axis. Only [batch, seq, ...] tensors are padded.
-            return tensors
-```
+Two reasons it was wrong. First, 2-D tensors reaching that function are not only pooled embeddings — they are also the `[batch, seq_len]` attention masks, which `_combine_tuple_results` sends through the same helper. Skipping them leaves ragged batches unpadded, and the subsequent `torch.cat` fails with `Sizes of tensors must match except in dimension 0`, breaking `get_embeddings(pooling=None)`, `get_hidden_states`, `get_logits`, and `get_attention`. Second, pooled results were never at risk: `hidden_dim` is constant across batches, so the computed max equals `D` and the loop is already a no-op by construction.
 
-and update that method's docstring `Args`/`Returns` to say tensors with fewer than three dimensions are returned unchanged.
+Instead, add the regression test that would have caught this. In `tests/test_embedding_memory.py`, cover `get_embeddings(pooling=None)` end-to-end across multiple batches of differing padded length — include one sequence clearly shorter than the rest, and assert both the embeddings shape `[N, max_L, D]` and the attention mask shape `[N, max_L]`. The mask is the part that broke, and every other test in this task either pools or calls `_process_embeddings_batch` directly, bypassing the executor.
 
 - [ ] **Step 11: Run the full fast suite plus the new tests**
 
@@ -1373,8 +1367,9 @@ git commit -m "Document bounded-memory embedding extraction"
 
 ## Self-Review
 
-**Spec coverage.** Change 1 (per-batch pooling on device, plus the
-`_pad_tensors_to_max_length` guard) is Task 2. Change 2 (submission window,
+**Spec coverage.** Change 1 (per-batch pooling on device) is Task 2; its
+originally-paired `_pad_tensors_to_max_length` guard change was withdrawn as a
+plan defect, and Task 2 Step 10 now records why. Change 2 (submission window,
 clone on receipt) is Tasks 3 and 4. Change 3 (`execute_iter` refactor and
 `iter_embeddings`) is Tasks 4 and 5. Change 4 (`SharedMemoryError` and the
 timeout diagnosis) is Task 6. The spec's testing section maps to: pooling

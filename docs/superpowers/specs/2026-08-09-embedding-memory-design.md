@@ -121,10 +121,21 @@ because today the global zero-padding is folded into the mean or max.
 Payload per batch drops from `B x L x D x 4` to `B x D x 4` — 33.5 MB to 131 KB at the
 numbers above, a 256x reduction. This alone brings pooled runs inside a 64 MB `/dev/shm`.
 
-**Related fix.** `_pad_tensors_to_max_length` (`executor.py:378`) pads any tensor with
-`dim >= 2` along dimension 1. A pooled `[B, D]` tensor survives it only because `hidden_dim`
-is constant across batches, so the computed max equals `D` and no padding occurs. That is
-accidental correctness. Make it explicit: skip padding for results with `dim < 3`.
+**Corrected note on `_pad_tensors_to_max_length`.** An earlier revision of this spec
+proposed changing that function's guard (`executor.py:378`) from `dim < 2` to `dim < 3`, on
+the theory that 2-D tensors reaching it could only be pooled `[B, D]` results whose survival
+was accidental. **That was wrong on both counts, and the change must not be made.**
+
+2-D tensors in that function are also the `[batch, seq_len]` attention masks, which
+`_combine_tuple_results` routes through the same padding helper as every other tensor
+element. Skipping them leaves ragged batches unpadded and `torch.cat` then fails with
+`Sizes of tensors must match except in dimension 0`, breaking `get_embeddings(pooling=None)`,
+`get_hidden_states`, `get_logits`, and `get_attention` alike. This was reproduced during
+implementation on 2026-08-09.
+
+Pooled `[B, D]` results were never at risk either: `hidden_dim` is constant across batches,
+so the computed max equals `D` for every tensor and the padding loop is a no-op by
+construction, not by luck. `_pad_tensors_to_max_length` needs no change for this work.
 
 ### Change 2 — bound the in-flight set, and clone out of shared memory
 
