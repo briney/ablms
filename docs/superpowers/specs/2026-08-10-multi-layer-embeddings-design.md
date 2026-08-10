@@ -281,7 +281,11 @@ installed.
 Because `get_hidden_states()` is reimplemented over `layer="all"`, it would start raising on
 AbLang — which today returns a single-element list. It therefore selects
 `"all" if self.supports_intermediate_layers else -1`, wrapping the single-layer result in a
-one-element list. AbLang's `get_hidden_states()` output is unchanged.
+one-element list. AbLang's `get_hidden_states()` still returns a one-element list holding its
+final layer. One field does change: that output's `layer` is now `-1` rather than `0`. The old
+value came from enumerating a one-element list, and `0` denotes the embedding layer in this
+library's convention, so it mislabelled AbLang's final layer; `-1` matches what
+`get_embeddings()` reports for the same model.
 
 ## Error handling
 

@@ -392,6 +392,11 @@ class EncoderAbLM(BaseAbLM):
             List of EmbeddingOutput objects, one per layer, in ascending layer
             order. Models that expose only their final layer return a
             single-element list.
+
+        Note:
+            Each per-layer output is a view into the stacked multi-layer tensor
+            and shares underlying storage. Holding a single layer's output keeps
+            the entire multi-layer tensor in memory.
         """
         sequences = self._normalize_input(sequences)
         self._validate_input(sequences)
@@ -412,6 +417,8 @@ class EncoderAbLM(BaseAbLM):
         if not stacked.is_multi_layer:
             return [stacked]
 
+        layers = stacked.layers
+        assert layers is not None  # is_multi_layer guarantees this
         return [
             EmbeddingOutput(
                 embeddings=stacked.embeddings[:, position],
@@ -420,7 +427,7 @@ class EncoderAbLM(BaseAbLM):
                 sequences=stacked.sequences,
                 layer=layer_index,
             )
-            for position, layer_index in enumerate(stacked.layers)
+            for position, layer_index in enumerate(layers)
         ]
 
     def _process_hidden_states_batch(
