@@ -63,6 +63,9 @@ packages = ["src/ablms"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 addopts = "-v --tb=short"
+markers = [
+    "slow: marks tests that load real model weights (deselect with '-m \"not slow\"')",
+]
 
 [tool.black]
 line-length = 88
