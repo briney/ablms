@@ -272,8 +272,16 @@ This is a deliberate behaviour change. Today `model.get_embeddings(seqs, layer=3
 returns the *final* layer with no indication that the request was ignored — a silent wrong
 answer. `layer=-1` and the default keep working.
 
-Its `_forward_all_hidden_states_with_model` returns a single-element list (`ablang.py:379`), so
-`get_hidden_states()` on AbLang keeps returning one layer, unchanged.
+AbLang also overrides `num_layers` with a literal `12` (AbRep's depth), because its model object
+has no HF config for the base property to read. Only the final layer is reachable, so the value
+affects nothing but which explicit positive index is accepted as "final" and the wording of the
+error. It should be confirmed against a real forward pass whenever the `ablang` package is
+installed.
+
+Because `get_hidden_states()` is reimplemented over `layer="all"`, it would start raising on
+AbLang — which today returns a single-element list. It therefore selects
+`"all" if self.supports_intermediate_layers else -1`, wrapping the single-layer result in a
+one-element list. AbLang's `get_hidden_states()` output is unchanged.
 
 ## Error handling
 
