@@ -124,5 +124,12 @@ class TestFinalLayerOnlyModels:
         with pytest.raises(UnsupportedOperationError):
             self.restricted([0, 12])
 
-    def test_final_layer_as_a_list_is_allowed(self):
-        assert self.restricted([-1]) == [12]
+    @pytest.mark.parametrize("layer", [[-1], [12]])
+    def test_list_form_is_rejected_even_for_the_final_layer(self, layer):
+        """A list requests a layer axis, even a single-element one naming the
+        final layer. A model restricted to its final layer cannot produce a
+        layer axis, so this must raise regardless of which index the list
+        names.
+        """
+        with pytest.raises(UnsupportedOperationError, match="layer axis"):
+            self.restricted(layer)

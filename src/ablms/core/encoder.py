@@ -11,7 +11,7 @@ from ablms.core.base import BaseAbLM
 from ablms.core.sequence import AntibodySequence
 from ablms.exceptions import UnsupportedOperationError
 from ablms.outputs import AttentionOutput, EmbeddingOutput, LogitsOutput, MaskScanOutput
-from ablms.utils.layers import resolve_layer_selection
+from ablms.utils.layers import LayerSelection, resolve_layer_selection
 from ablms.utils.pooling import apply_pooling
 
 
@@ -53,7 +53,7 @@ class EncoderAbLM(BaseAbLM):
     def get_embeddings(
         self,
         sequences: str | AntibodySequence | list[str] | list[AntibodySequence],
-        layer: int | list[int] | str = -1,
+        layer: LayerSelection = -1,
         pooling: str | None = None,
         batch_size: int = 32,
         show_progress: bool = True,
@@ -66,10 +66,12 @@ class EncoderAbLM(BaseAbLM):
             layer: Which layer(s) to extract. One of:
                 - an int (default -1, the final layer). Index 0 is the
                   embedding layer and index i is the output of block i.
-                - a list of ints, which adds a layer axis at dimension 1.
+                - a list, tuple, or range of ints, which adds a layer axis at
+                  dimension 1.
                 - "all", for every layer in ascending order.
-                A list of length one still adds the layer axis, so a
-                programmatically built selection has a stable shape.
+                A single-element list, tuple, or range still adds the layer
+                axis, so a programmatically built selection has a stable
+                shape.
             pooling: Optional pooling strategy for sequence-level embeddings.
                 If None (default), returns token-level embeddings. Pooling is
                 applied within each batch on the model's device, and per layer
@@ -269,7 +271,7 @@ class EncoderAbLM(BaseAbLM):
     def iter_embeddings(
         self,
         sequences: str | AntibodySequence | list[str] | list[AntibodySequence],
-        layer: int | list[int] | str = -1,
+        layer: LayerSelection = -1,
         pooling: str | None = None,
         batch_size: int = 32,
         show_progress: bool = True,
@@ -287,10 +289,12 @@ class EncoderAbLM(BaseAbLM):
             layer: Which layer(s) to extract. One of:
                 - an int (default -1, the final layer). Index 0 is the
                   embedding layer and index i is the output of block i.
-                - a list of ints, which adds a layer axis at dimension 1.
+                - a list, tuple, or range of ints, which adds a layer axis at
+                  dimension 1.
                 - "all", for every layer in ascending order.
-                A list of length one still adds the layer axis, so a
-                programmatically built selection has a stable shape.
+                A single-element list, tuple, or range still adds the layer
+                axis, so a programmatically built selection has a stable
+                shape.
             pooling: Optional pooling strategy applied within each batch.
                 Valid options: "mean", "max", "cls", "first", "last".
             batch_size: Batch size for processing (per GPU when using multi-GPU).

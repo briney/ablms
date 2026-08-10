@@ -67,9 +67,9 @@ BaseAbLM (abstract base)
 1. Create `src/ablms/encoders/yourmodel.py` inheriting from `EncoderAbLM`
 2. Set class attributes: `model_name`, `supports_paired`, `max_length`, `embedding_dim`,
    `mask_token`, `separator`, `has_mlm_head`. Override the `num_layers` property if the
-   model object does not expose a HuggingFace config with `num_hidden_layers` (IgT5 and
-   AbLang2 do), and set `supports_intermediate_layers = False` if only the final layer is
-   reachable (AbLang).
+   model's config does not expose `num_hidden_layers` under that name, or has no
+   HuggingFace config at all (IgT5 and AbLang2 both need this override), and set
+   `supports_intermediate_layers = False` if only the final layer is reachable (AbLang).
 3. Implement abstract methods:
    - `_load_model()`: Load model and tokenizer
    - `_format_for_model()`: Convert `<MASK>` to model-specific token, join chains

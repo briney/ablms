@@ -6,9 +6,14 @@ from ablms.exceptions import UnsupportedOperationError
 
 ALL_LAYERS = "all"
 
+# What callers may pass for `layer`: a single index, a sequence of indices
+# (list, tuple, or range), or "all". Kept in one place so the public
+# get_embeddings()/iter_embeddings() signatures can match this function's.
+LayerSelection = int | list[int] | tuple[int, ...] | range | str
+
 
 def resolve_layer_selection(
-    layer: int | list[int] | str,
+    layer: LayerSelection,
     num_layers: int,
     *,
     model_name: str,
@@ -55,7 +60,11 @@ def resolve_layer_selection(
             )
         resolved = list(range(n_selectable))
         _check_supported(
-            resolved, n_selectable, model_name, supports_intermediate_layers
+            resolved,
+            n_selectable,
+            model_name,
+            supports_intermediate_layers,
+            is_list_form=True,
         )
         return resolved
 
@@ -72,7 +81,11 @@ def resolve_layer_selection(
         resolved = [_normalize(index, n_selectable) for index in indices]
         _reject_duplicates(resolved, indices, model_name)
         _check_supported(
-            resolved, n_selectable, model_name, supports_intermediate_layers
+            resolved,
+            n_selectable,
+            model_name,
+            supports_intermediate_layers,
+            is_list_form=True,
         )
         return resolved
 
@@ -82,6 +95,7 @@ def resolve_layer_selection(
         n_selectable,
         model_name,
         supports_intermediate_layers,
+        is_list_form=False,
     )
     return layer
 
@@ -126,12 +140,25 @@ def _check_supported(
     n_selectable: int,
     model_name: str,
     supports_intermediate_layers: bool,
+    *,
+    is_list_form: bool,
 ) -> None:
-    """Reject non-final selections for models that expose only their last layer."""
+    """Reject non-final selections for models that expose only their last layer.
+
+    Any list/tuple/range/"all" form is rejected outright, even one that names
+    only the final layer: that request type asks for a layer axis in the
+    result, and a model restricted to its final layer cannot produce one.
+    """
     if supports_intermediate_layers:
         return
 
     final = n_selectable - 1
+    if is_list_form:
+        raise UnsupportedOperationError(
+            f"{model_name} exposes only its final layer ({final}) and cannot "
+            f"produce a layer axis. Requested {resolved}; pass layer={final} "
+            f"or layer=-1 instead of a list, tuple, range, or 'all'."
+        )
     if resolved != [final]:
         raise UnsupportedOperationError(
             f"{model_name} exposes only its final layer ({final}); requested "

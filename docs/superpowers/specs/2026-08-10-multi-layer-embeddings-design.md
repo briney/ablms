@@ -265,8 +265,12 @@ all-layer work to `iter_embeddings()`.
 ## AbLang v1
 
 `AbLang` sets `supports_intermediate_layers = False`. Validation raises
-`UnsupportedOperationError` for any request other than the final layer: `"all"`, any
-multi-element list, and any single index that does not resolve to the last layer.
+`UnsupportedOperationError` for any request other than a plain int naming the final layer:
+`"all"`, any list/tuple/range regardless of length or contents (including a single-element
+one naming the final layer, e.g. `[-1]` or `[12]`), and any single index that does not resolve
+to the last layer. A list/tuple/range/`"all"` requests a layer axis in the result, and a model
+restricted to its final layer cannot produce one — so only the bare-int forms (`layer=-1`,
+`layer=12`, or the default) are accepted.
 
 This is a deliberate behaviour change. Today `model.get_embeddings(seqs, layer=3)` on AbLang
 returns the *final* layer with no indication that the request was ignored — a silent wrong
@@ -296,6 +300,7 @@ library's convention, so it mislabelled AbLang's final layer; `-1` matches what
 | Duplicate indices after resolution | `ValueError` |
 | `layer` is a string other than `"all"` | `ValueError` |
 | Non-final request on a model with `supports_intermediate_layers = False` | `UnsupportedOperationError` |
+| Any list/tuple/range/`"all"` request on a model with `supports_intermediate_layers = False`, even a single-element list naming the final layer (e.g. `[-1]`, `[12]`) | `UnsupportedOperationError` |
 | `concat_layers()` / `get_layer()` on single-layer output | `ValueError` |
 | `get_layer()` for a layer that was not selected | `ValueError` |
 | `num_layers` disagrees with `len(hidden_states)` | `RuntimeError` |

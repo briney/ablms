@@ -194,7 +194,7 @@ class AbLang(EncoderAbLM):
     def _process_embeddings_batch(
         self,
         sequences: list[AntibodySequence],
-        layer: int = -1,
+        layer: int | list[int] = -1,
         pooling: str | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[dict[str, tuple[int, int]]]]:
         """
@@ -211,7 +211,11 @@ class AbLang(EncoderAbLM):
         Args:
             sequences: Batch of sequences (already batched by executor).
             layer: Layer index to extract embeddings from (ignored by AbLang,
-                which only exposes its final layer).
+                which only exposes its final layer). Typed to match the base
+                class, but `resolve_layer_selection` rejects any list/tuple/
+                range/"all" form before dispatch for models with
+                `supports_intermediate_layers=False`, so a list can never
+                reach this method in practice.
             pooling: Optional pooling strategy applied within this batch.
                 One of "mean", "max", "cls", "first", "last", or None for
                 token-level output.
@@ -352,9 +356,15 @@ class AbLang(EncoderAbLM):
         self,
         sequences: list[AntibodySequence],
         model,
-        layer: int = -1,
+        layer: int | list[int] = -1,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[dict[str, tuple[int, int]]]]:
-        """Forward pass to get embeddings using a specific model."""
+        """Forward pass to get embeddings using a specific model.
+
+        `layer` is accepted for signature compatibility with the caller but is
+        always ignored: AbLang only exposes its final layer, and
+        `resolve_layer_selection` rejects any list/tuple/range/"all" form
+        before dispatch, so a list can never reach this method in practice.
+        """
         formatted = self._format_for_model(sequences)
         tokenized = self._tokenize_with_model(formatted, model)
         offsets = self._compute_token_offsets(sequences, tokenized)

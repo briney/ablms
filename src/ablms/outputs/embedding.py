@@ -23,7 +23,9 @@ class EmbeddingOutput:
             Shape: [batch, seq_len].
         token_offsets: List of dictionaries mapping chain names to (start, end)
             positions for each sequence in the batch.
-        pooled: Optional pooled sequence-level embeddings. Shape: [batch, hidden_dim].
+        pooled: Optional pooled sequence-level embeddings. Shape:
+            [batch, hidden_dim], or [batch, layers, hidden_dim] when multiple
+            layers were selected.
         sequences: Original input sequences.
         layer: The layer index from which embeddings were extracted, or None
             when multiple layers were selected (see `layers`).
