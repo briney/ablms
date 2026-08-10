@@ -371,6 +371,12 @@ class MultiGPUExecutor:
                         original_error=data["exception"],
                     )
 
+                if msg_type != "result":
+                    # A stray or stale message - e.g. a late "ready" from a
+                    # respawned worker. Treating it as a result would look up an
+                    # unknown task id and fail with a bare KeyError, so skip it.
+                    continue
+
                 # Copy out of shared memory so the worker's segment is freed
                 # as soon as `data` goes out of scope.
                 pending[task_id] = _detach_from_shm(data)
@@ -406,10 +412,13 @@ class MultiGPUExecutor:
         for _ in range(count):
             try:
                 self._result_queue.get(timeout=WORKER_TIMEOUT)
-            except (queue.Empty, OSError, ValueError):
+            except (queue.Empty, EOFError, OSError, RuntimeError, ValueError):
                 # Nothing arrived within the timeout, or the queue is already
-                # torn down. Either way there is nothing left to reclaim, and
-                # this runs in a `finally` - it must not mask the real error.
+                # torn down. A worker that died mid-flight can also surface as
+                # EOFError (broken pipe) or RuntimeError (torch failing to
+                # rebuild an invalidated shared-memory handle). Either way there
+                # is nothing left to reclaim, and this runs in a `finally` - it
+                # must not mask the real error.
                 break
 
     def _stalled_error(self) -> Exception:

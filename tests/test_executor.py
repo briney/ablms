@@ -9,6 +9,7 @@ import pytest
 import torch
 
 from ablms.parallel.executor import MultiGPUExecutor, _detach_from_shm
+from ablms.parallel.worker import WorkerHandle
 from tests.fake_worker_model import FakeWorkerModel
 
 
@@ -144,21 +145,97 @@ class TestExecuteIterOrdering:
 
     @pytest.mark.slow
     def test_execute_matches_execute_iter(self):
+        """execute() must be exactly the concatenation of execute_iter()."""
         executor = _cpu_executor(2)
+        call = dict(
+            method_name="_process_echo_batch",
+            sequences=list(range(15)),
+            batch_size=4,
+            show_progress=False,
+            scale=2,
+        )
         try:
-            combined, _, offsets = executor.execute(
-                method_name="_process_echo_batch",
-                sequences=list(range(15)),
-                batch_size=4,
-                show_progress=False,
-                scale=2,
-            )
+            combined, _, offsets = executor.execute(**call)
+            streamed = list(executor.execute_iter(**call))
         finally:
             executor.shutdown()
 
         assert combined.shape == (15, 2)
         assert torch.equal(combined[:, 0], torch.arange(15, dtype=torch.float32) * 2)
         assert len(offsets) == 15
+
+        # Compare only the value column: the pid column depends on which worker
+        # happened to pick up each batch, which is not part of the contract.
+        streamed_values = torch.cat([result[0] for _, result in streamed])
+        assert torch.equal(streamed_values[:, 0], combined[:, 0])
+
+        streamed_offsets = [o for _, result in streamed for o in result[2]]
+        assert streamed_offsets == offsets
+
+        assert all(result[1] is None for _, result in streamed)
+
+    @pytest.mark.slow
+    def test_outstanding_tasks_stay_within_the_submission_window(self, monkeypatch):
+        """At most num_workers * window tasks may be outstanding at once.
+
+        This is the property the submission window exists to provide: it bounds
+        how many results can be live in shared memory simultaneously,
+        independent of dataset size. Revert _iter_multi to submitting every
+        batch up front and the peak becomes the batch count.
+
+        "Outstanding" is measured as submitted-minus-returned, counting a task
+        as returned the moment the parent pulls it off the result queue - that
+        is the point at which the worker's shared-memory segment is released.
+        Submitted-minus-*yielded* would additionally include the reorder buffer,
+        which is heap-resident and deliberately unbounded.
+        """
+        executor = _cpu_executor(2)
+        num_workers = executor.num_devices
+        window = executor._submission_window
+
+        counts = {"submitted": 0, "returned": 0, "peak": 0}
+
+        original_submit = WorkerHandle.submit_task
+
+        def counting_submit(handle, *args, **kwargs):
+            counts["submitted"] += 1
+            counts["peak"] = max(
+                counts["peak"], counts["submitted"] - counts["returned"]
+            )
+            return original_submit(handle, *args, **kwargs)
+
+        monkeypatch.setattr(WorkerHandle, "submit_task", counting_submit)
+
+        yielded = 0
+        try:
+            # Initialize first, so the workers' "ready" messages are not
+            # counted as returned results.
+            executor._ensure_initialized()
+            original_get = executor._result_queue.get
+
+            def counting_get(*args, **kwargs):
+                message = original_get(*args, **kwargs)
+                counts["returned"] += 1
+                return message
+
+            executor._result_queue.get = counting_get
+
+            for _ in executor.execute_iter(
+                method_name="_process_echo_batch",
+                sequences=list(range(60)),
+                batch_size=2,
+                show_progress=False,
+            ):
+                yielded += 1
+        finally:
+            executor.shutdown()
+
+        assert yielded == 30
+        assert counts["submitted"] == 30
+        # The window must be filled (otherwise the devices are idle)...
+        assert counts["peak"] >= num_workers * window
+        # ...and never exceeded.
+        assert counts["peak"] <= num_workers * window
 
     @pytest.mark.slow
     def test_work_is_spread_across_workers(self):
