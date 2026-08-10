@@ -133,7 +133,7 @@ def _register_all_models() -> None:
                 model_id="Exscientia/IgBert",
                 supports_paired=True,
                 max_length=512,
-                embedding_dim=768,
+                embedding_dim=1024,
                 mask_token="[MASK]",
                 separator="[SEP]",
                 has_mlm_head=True,
@@ -190,7 +190,7 @@ def _register_all_models() -> None:
             ModelConfig(
                 name="balm",
                 model_class=BALM,
-                model_id="BALM/BALM-paired",
+                model_id="brineylab/BALM-paired",
                 supports_paired=True,
                 max_length=512,
                 embedding_dim=1024,

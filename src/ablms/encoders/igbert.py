@@ -26,7 +26,7 @@ class IgBERT(EncoderAbLM):
         model_name: "igbert"
         supports_paired: True
         max_length: 512
-        embedding_dim: 768
+        embedding_dim: 1024
         mask_token: "[MASK]"
         separator: "[SEP]"
     """
@@ -34,7 +34,7 @@ class IgBERT(EncoderAbLM):
     model_name = "igbert"
     supports_paired = True
     max_length = 512
-    embedding_dim = 768
+    embedding_dim = 1024
     mask_token = "[MASK]"
     separator = "[SEP]"
     has_mlm_head = True
