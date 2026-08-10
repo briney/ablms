@@ -139,8 +139,8 @@ model = load_model("igbert")
 sequences = ["EVQLVESGGGLVQPGRSLRLSCAASGFTFS"]
 
 attention = model.get_attention(sequences)
-print(attention.num_layers)  # 12
-print(attention.num_heads)   # 12
+print(attention.num_layers)  # 30
+print(attention.num_heads)   # 16
 
 # Get attention from a specific layer and head
 layer_5_head_0 = attention.get_head(layer=5, head=0)
