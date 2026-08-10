@@ -15,6 +15,34 @@ if TYPE_CHECKING:
     from ablms.core.sequence import AntibodySequence
 
 
+def _detach_from_shm(obj: Any) -> Any:
+    """
+    Copy queue-received tensors out of shared memory.
+
+    torch.multiprocessing transfers CPU tensors by moving their storage into a
+    POSIX shared memory segment and passing a file descriptor, rather than by
+    copying bytes through the pipe. The segment stays live for as long as any
+    process holds the tensor, so a parent that retains results keeps consuming
+    /dev/shm - which is only 64 MB by default inside a container. Cloning moves
+    the data into ordinary heap memory so the segment can be released.
+
+    Args:
+        obj: A value received from a worker: a tensor, or a tuple/list that may
+            contain tensors, or anything else.
+
+    Returns:
+        The same structure with every tensor replaced by a heap-backed clone.
+        Non-tensor values are returned unchanged.
+    """
+    if isinstance(obj, torch.Tensor):
+        return obj.clone()
+    if isinstance(obj, tuple):
+        return tuple(_detach_from_shm(item) for item in obj)
+    if isinstance(obj, list):
+        return [_detach_from_shm(item) for item in obj]
+    return obj
+
+
 class MultiGPUExecutor:
     """
     Manages a pool of worker processes for multi-GPU inference.
