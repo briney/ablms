@@ -28,6 +28,13 @@ def sequences():
     return [AntibodySequence(heavy=h) for h in HEAVY_CHAINS]
 
 
+@pytest.fixture(scope="session")
+def ragged_sequences():
+    """Sequences with one much shorter chain, so batches pad to different lengths."""
+    chains = HEAVY_CHAINS + ["EVQLVESGGGLIQ"]  # deliberately much shorter
+    return [AntibodySequence(heavy=h) for h in chains]
+
+
 class TestBatchLevelPooling:
     """_process_embeddings_batch reduces before returning."""
 
@@ -84,3 +91,25 @@ class TestPooledEmbeddingsUnchanged:
         assert output.pooled is not None
         assert output.attention_mask is None
         assert len(output.token_offsets) == len(sequences)
+
+
+class TestRaggedBatchTokenLevel:
+    """get_embeddings(pooling=None) must survive batches padded to different lengths.
+
+    _pad_tensors_to_max_length is applied to every tensor in the result tuple,
+    including the [batch, seq_len] attention mask, not just the [batch, seq_len,
+    hidden_dim] embeddings. Regression coverage for a guard change that stopped
+    the mask from being re-padded before concatenation across batches.
+    """
+
+    @pytest.mark.slow
+    def test_multi_batch_token_level_concatenates(self, esm2_cpu, ragged_sequences):
+        output = esm2_cpu.get_embeddings(
+            ragged_sequences, pooling=None, batch_size=2, show_progress=False
+        )
+        n = len(ragged_sequences)
+        max_len = output.embeddings.shape[1]
+
+        assert output.embeddings.shape == (n, max_len, esm2_cpu.embedding_dim)
+        assert output.attention_mask is not None
+        assert output.attention_mask.shape == (n, max_len)

@@ -383,17 +383,12 @@ class MultiGPUExecutor:
         zeros to match the maximum sequence length across all tensors.
 
         Args:
-            tensors: List of tensors to pad. Tensors with fewer than three
-                dimensions (e.g. pooled [batch, hidden] results) have no
-                sequence axis and are returned unchanged.
+            tensors: List of tensors to pad.
 
         Returns:
-            List of tensors with uniform sequence length (dimension 1), or the
-            input unchanged if the tensors have fewer than three dimensions.
+            List of tensors with uniform sequence length (dimension 1).
         """
-        if not tensors or tensors[0].dim() < 3:
-            # Nothing to pad: 1-D and 2-D results (e.g. pooled [batch, hidden])
-            # have no sequence axis. Only [batch, seq, ...] tensors are padded.
+        if not tensors or tensors[0].dim() < 2:
             return tensors
 
         max_seq_len = max(t.shape[1] for t in tensors)
