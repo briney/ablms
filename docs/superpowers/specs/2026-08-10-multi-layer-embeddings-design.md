@@ -40,8 +40,8 @@ argument (`ablang.py:353-355`).
 - `layer=` accepts a single index (unchanged), an explicit list, or `"all"`.
 - Single-index calls are byte-identical to today, in both value and tensor shape.
 - Pooled multi-layer runs stay memory-bounded and compose with `iter_embeddings()`.
-- No per-encoder forward-pass changes. Each encoder declares a `num_layers` class attribute;
-  only AbLang v1 needs behavioural code (its guard).
+- No per-encoder forward-pass changes. Only three encoders need any code at all: `IgT5` and
+  `AbLang2` override how the layer count is read, and `AbLang` gets its guard.
 - A model that cannot honour a layer request raises instead of returning the wrong layer.
 
 ## Non-goals
@@ -109,29 +109,40 @@ Validation, in `get_embeddings()` before any work is dispatched:
 
 ### Where the layer count comes from
 
-Validation happens in the parent process, which in multi-GPU mode **never loads the model** —
-`BaseAbLM.__init__` leaves `self._model = None` and workers construct their own instances
-(`base.py:83`, `base.py:137-152`). Reading the layer count off a loaded model would force an
-expensive parent-side load in exactly the case where it is most wasteful.
-
-So the count becomes static class metadata, alongside `embedding_dim` and `max_length`:
+Validation happens in the parent process, before dispatch, so the parent needs the layer count.
+It has it: **every encoder loads its model eagerly in `__init__`** (`igbert.py:57`,
+`esm2.py:85`, and the same line in all seven others), including in multi-GPU mode. `self._model`
+is therefore always available by the time `get_embeddings()` is called, and the count can be
+read from the live checkpoint rather than declared:
 
 ```python
 class EncoderAbLM(BaseAbLM):
-    num_layers: int = 12                       # transformer blocks
     supports_intermediate_layers: bool = True
+
+    @property
+    def num_layers(self) -> int:
+        """Number of transformer blocks. Selectable indices are 0..num_layers."""
+        return self._model.config.num_hidden_layers
 ```
 
-ESM2 already keeps a per-checkpoint `num_layers` in `ESM2_CONFIGS` (`esm2.py:17-22`) and
-assigns `embedding_dim` per instance from it (`esm2.py:80`); it assigns `num_layers` the same
-way. This is architecture metadata fixed per checkpoint, not something to discover at runtime.
+Reading the checkpoint beats static metadata here because two encoders have no fixed depth:
+`ESM2` selects among six variants from 6 to 48 layers via `model_id` (`esm2.py:17-22`), and
+`FtESM` wraps a fine-tuned ESM-2 whose depth follows its base. A declared constant would have
+to be maintained per variant and could silently disagree with the weights actually loaded.
 
-The declared value is cross-checked against reality where the tensors are in hand: the
-selection helper raises a clear error if `len(hidden_states) != num_layers + 1`. A
-`@pytest.mark.slow` test asserts the declared count against each installed model.
+Two encoders need an override because their model object is not a standard HF masked-LM:
 
-`CLAUDE.md`'s "Adding a New Encoder Model" checklist gains `num_layers` in its class-attribute
-step.
+- `IgT5` loads `T5EncoderModel` (`igt5.py:63`), whose `T5Config` spells the field `num_layers`,
+  not `num_hidden_layers`.
+- `AbLang2` has no HF config; it counts `len(self._model.encoder_blocks)`, which is the
+  arithmetic already inlined at `ablang2.py:177`.
+
+The value is cross-checked where the tensors are in hand: the selection helper raises if
+`len(hidden_states) != num_layers + 1`. A `@pytest.mark.slow` test asserts the property against
+a real forward pass for every installed model, so a wrong override surfaces loudly.
+
+`CLAUDE.md`'s "Adding a New Encoder Model" checklist gains a note that `num_layers` must be
+overridden if the model's config does not expose `num_hidden_layers`.
 
 ### Routing, without touching the encoders
 
@@ -275,7 +286,7 @@ Its `_forward_all_hidden_states_with_model` returns a single-element list (`abla
 | Non-final request on a model with `supports_intermediate_layers = False` | `UnsupportedOperationError` |
 | `concat_layers()` / `get_layer()` on single-layer output | `ValueError` |
 | `get_layer()` for a layer that was not selected | `ValueError` |
-| Declared `num_layers` disagrees with `len(hidden_states)` | `RuntimeError` |
+| `num_layers` disagrees with `len(hidden_states)` | `RuntimeError` |
 
 All argument validation happens in `get_embeddings()`/`iter_embeddings()` before dispatch, so
 bad input fails at the call site rather than inside a worker — matching the eager-validation
@@ -305,16 +316,16 @@ Memory and parallel behaviour, extending `tests/test_embedding_memory.py`:
 Validation: each error-table row gets a case. Duplicate detection is tested through the
 negative-index form (`[12, -1]`), since that is the one a caller writes by accident.
 
-`tests/test_encoder_contract.py` gains an assertion that every encoder declares a positive
-`num_layers`, and a `@pytest.mark.slow` test verifies each installed model's declared count
-against `len(hidden_states)` from a real forward pass.
+A `@pytest.mark.slow` test verifies `num_layers + 1 == len(hidden_states)` from a real forward
+pass, parametrized over every encoder whose package is installed and skipping the rest. This is
+what catches a missing `num_layers` override on a newly added encoder.
 
 ## Known risks
 
-**The declared `num_layers` can drift from the checkpoint.** A model whose upstream weights are
-replaced with a different depth would fail the runtime cross-check rather than silently
-mis-index — an explicit `RuntimeError`, but only at inference time for models not covered by
-the slow test.
+**A new encoder whose config lacks `num_hidden_layers` fails at inference, not at import.** The
+base property raises `AttributeError` on first use rather than when the class is defined. The
+slow test covers this for installed models; an encoder whose package is absent from the test
+environment (AbLang today) is not covered until someone runs it.
 
 **AbLang2 over-computes on partial selections.** `layer=[0, 6]` requests all 13 rep layers and
 discards 11. Fixable later by widening `_forward_all_hidden_states` with an optional layer
