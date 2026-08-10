@@ -40,6 +40,11 @@ class IgT5(EncoderAbLM):
     separator = "</s>"
     has_mlm_head = False
 
+    @property
+    def num_layers(self) -> int:
+        """T5Config spells the encoder depth `num_layers`, not `num_hidden_layers`."""
+        return self._model.config.num_layers
+
     MODEL_ID = "Exscientia/IgT5"
 
     def __init__(

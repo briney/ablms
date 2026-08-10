@@ -40,6 +40,21 @@ class AbLang(EncoderAbLM):
     mask_token = "*"
     separator = None
     has_mlm_head = True
+    supports_intermediate_layers = False
+
+    @property
+    def num_layers(self) -> int:
+        """
+        AbRep's depth, per the AbLang paper.
+
+        Hardcoded because AbLang's model object exposes no config. Only the
+        final layer is reachable (`_forward_embeddings_with_model` can return
+        nothing else), so this value affects only which explicit positive index
+        is accepted as "final" and the wording of the resulting error. Confirm
+        it against a real forward pass if the `ablang` package is ever installed
+        in the test environment.
+        """
+        return 12
 
     def __init__(
         self,

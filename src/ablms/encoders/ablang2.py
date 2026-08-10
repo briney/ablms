@@ -39,6 +39,11 @@ class AbLang2(EncoderAbLM):
     separator = "|"
     has_mlm_head = True
 
+    @property
+    def num_layers(self) -> int:
+        """AbLang2 has no HuggingFace config; count the encoder blocks directly."""
+        return len(self._model.encoder_blocks)
+
     def __init__(
         self,
         device: str | torch.device | None = None,

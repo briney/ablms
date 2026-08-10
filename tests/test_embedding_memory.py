@@ -187,3 +187,20 @@ class TestRaggedBatchTokenLevel:
         assert output.embeddings.shape == (n, max_len, esm2_cpu.embedding_dim)
         assert output.attention_mask is not None
         assert output.attention_mask.shape == (n, max_len)
+
+
+class TestLayerCount:
+    """num_layers must agree with the model's actual hidden_states tuple."""
+
+    @pytest.mark.slow
+    def test_matches_forward_pass(self, esm2_cpu, sequences):
+        formatted = esm2_cpu._format_for_model(sequences[:1])
+        tokenized = esm2_cpu._tokenize(formatted)
+        hidden_states, _ = esm2_cpu._forward_all_hidden_states(tokenized)
+
+        assert esm2_cpu.num_layers + 1 == len(hidden_states)
+
+    @pytest.mark.slow
+    def test_matches_the_checkpoint_variant(self, esm2_cpu):
+        """The t6 checkpoint has 6 blocks; a hardcoded constant would not track this."""
+        assert esm2_cpu.num_layers == 6

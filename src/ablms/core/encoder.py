@@ -29,6 +29,26 @@ class EncoderAbLM(BaseAbLM):
     # Whether the model has a masked language modeling head
     has_mlm_head: bool = True
 
+    # Whether the model can return layers other than its final one
+    supports_intermediate_layers: bool = True
+
+    @property
+    def num_layers(self) -> int:
+        """
+        Number of transformer blocks in the loaded model.
+
+        Selectable layer indices run from 0 to num_layers inclusive: index 0 is
+        the embedding-layer output and index i is the output of block i. This
+        matches HuggingFace, where len(hidden_states) == num_hidden_layers + 1.
+
+        Subclasses must override this if their model object does not expose a
+        HuggingFace config with `num_hidden_layers`.
+
+        Returns:
+            Count of transformer blocks.
+        """
+        return self._model.config.num_hidden_layers
+
     def get_embeddings(
         self,
         sequences: str | AntibodySequence | list[str] | list[AntibodySequence],

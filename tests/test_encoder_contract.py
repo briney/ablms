@@ -138,3 +138,39 @@ class TestBatchMethodSignatures:
         assert_bind_compatible(base, base)
         with pytest.raises(TypeError):
             assert_bind_compatible(base, narrowed)
+
+
+class TestLayerCountDeclarations:
+    """Every encoder must be able to report its layer count."""
+
+    ENCODER_CLASSES = (
+        IgBERT,
+        IgT5,
+        AntiBERTa2,
+        BALM,
+        AntiBERTy,
+        AbLang2,
+        AbLang,
+        FtESM,
+        ESM2,
+    )
+
+    @pytest.mark.parametrize("model_class", ENCODER_CLASSES, ids=lambda c: c.__name__)
+    def test_num_layers_is_a_property(self, model_class):
+        """num_layers must be a property, not an int, so it tracks the checkpoint."""
+        resolved = next(
+            vars(klass)["num_layers"]
+            for klass in model_class.__mro__
+            if "num_layers" in vars(klass)
+        )
+        assert isinstance(resolved, property)
+
+    @pytest.mark.parametrize("model_class", ENCODER_CLASSES, ids=lambda c: c.__name__)
+    def test_declares_intermediate_layer_support(self, model_class):
+        assert isinstance(model_class.supports_intermediate_layers, bool)
+
+    def test_ablang_declares_no_intermediate_layers(self):
+        """AbLang exposes only its final layer; everything else exposes all of them."""
+        assert AbLang.supports_intermediate_layers is False
+        assert IgBERT.supports_intermediate_layers is True
+        assert ESM2.supports_intermediate_layers is True
