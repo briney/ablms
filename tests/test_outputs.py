@@ -65,6 +65,122 @@ class TestEmbeddingOutput:
         cpu_output = output.to(torch.device("cpu"))
         assert cpu_output.embeddings.device.type == "cpu"
 
+    def test_single_layer_output_is_not_multi_layer(self):
+        """Defaults are unchanged: no layers field means the old behaviour."""
+        output = EmbeddingOutput(embeddings=torch.randn(2, 10, 768))
+
+        assert not output.is_multi_layer
+        assert output.num_layers == 1
+        assert output.layers is None
+        assert output.layer == -1
+
+    def test_multi_layer_token_level_properties(self):
+        output = EmbeddingOutput(
+            embeddings=torch.randn(2, 3, 10, 768), layer=None, layers=[0, 6, 12]
+        )
+
+        assert output.is_multi_layer
+        assert output.num_layers == 3
+        assert output.batch_size == 2
+        assert output.hidden_dim == 768
+        assert not output.is_pooled
+
+    def test_multi_layer_pooled_is_detected(self):
+        """[batch, layers, hidden] is pooled even though it has three dims."""
+        output = EmbeddingOutput(
+            embeddings=torch.randn(2, 3, 768),
+            pooled=torch.randn(2, 3, 768),
+            layer=None,
+            layers=[0, 6, 12],
+        )
+
+        assert output.is_pooled
+        assert output.hidden_dim == 768
+
+    def test_get_layer_returns_the_requested_layer(self):
+        embeddings = torch.randn(2, 3, 768)
+        output = EmbeddingOutput(embeddings=embeddings, layer=None, layers=[0, 6, 12])
+
+        assert torch.equal(output.get_layer(6), embeddings[:, 1])
+        assert torch.equal(output.get_layer(0), embeddings[:, 0])
+
+    def test_get_layer_rejects_an_unselected_layer(self):
+        output = EmbeddingOutput(
+            embeddings=torch.randn(2, 3, 768), layer=None, layers=[0, 6, 12]
+        )
+        with pytest.raises(ValueError, match="not selected"):
+            output.get_layer(7)
+
+    def test_get_layer_rejects_single_layer_output(self):
+        output = EmbeddingOutput(embeddings=torch.randn(2, 10, 768))
+        with pytest.raises(ValueError, match="single layer"):
+            output.get_layer(0)
+
+    def test_concat_layers_on_pooled_output(self):
+        embeddings = torch.randn(2, 3, 768)
+        output = EmbeddingOutput(
+            embeddings=embeddings, pooled=embeddings, layer=None, layers=[0, 6, 12]
+        )
+
+        concatenated = output.concat_layers()
+
+        assert concatenated.shape == (2, 3 * 768)
+        expected = torch.cat([embeddings[:, i] for i in range(3)], dim=-1)
+        assert torch.equal(concatenated, expected)
+
+    def test_concat_layers_on_token_level_output(self):
+        embeddings = torch.randn(2, 3, 10, 768)
+        output = EmbeddingOutput(embeddings=embeddings, layer=None, layers=[0, 6, 12])
+
+        concatenated = output.concat_layers()
+
+        assert concatenated.shape == (2, 10, 3 * 768)
+        expected = torch.cat([embeddings[:, i] for i in range(3)], dim=-1)
+        assert torch.equal(concatenated, expected)
+
+    def test_concat_layers_rejects_single_layer_output(self):
+        output = EmbeddingOutput(embeddings=torch.randn(2, 10, 768))
+        with pytest.raises(ValueError, match="single layer"):
+            output.concat_layers()
+
+    def test_multi_layer_chain_embeddings_keep_the_layer_axis(self):
+        output = EmbeddingOutput(
+            embeddings=torch.randn(1, 3, 20, 768),
+            token_offsets=[{"heavy": (1, 10), "light": (11, 19)}],
+            layer=None,
+            layers=[0, 6, 12],
+        )
+
+        heavy = output.get_chain_embeddings(0, "heavy")
+
+        assert heavy.shape == (3, 9, 768)
+
+    def test_multi_layer_sequence_tokens_strip_padding(self):
+        mask = torch.tensor([[1, 1, 1, 0, 0]])
+        output = EmbeddingOutput(
+            embeddings=torch.randn(1, 3, 5, 768),
+            attention_mask=mask,
+            layer=None,
+            layers=[0, 6, 12],
+        )
+
+        tokens = output.get_sequence_tokens(0)
+
+        assert tokens.shape == (3, 3, 768)
+
+    def test_layers_survive_a_device_move(self):
+        output = EmbeddingOutput(
+            embeddings=torch.randn(2, 3, 768), layer=None, layers=[0, 6, 12]
+        )
+        assert output.cpu().layers == [0, 6, 12]
+        assert output.numpy().layers == [0, 6, 12]
+
+    def test_repr_reports_the_selected_layers(self):
+        output = EmbeddingOutput(
+            embeddings=torch.randn(2, 3, 768), layer=None, layers=[0, 6, 12]
+        )
+        assert "layers=[0, 6, 12]" in repr(output)
+
 
 class TestLogitsOutput:
     """Test LogitsOutput dataclass."""
