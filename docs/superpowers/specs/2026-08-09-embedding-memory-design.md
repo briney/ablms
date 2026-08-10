@@ -111,6 +111,20 @@ instead forwards `pooling` as a method kwarg. When `pooling` is not `None` it bu
 `EmbeddingOutput` with `embeddings=pooled`, `pooled=pooled` (the same tensor object, so no
 duplicated memory), and `attention_mask=None`, exactly as today.
 
+**Subclass overrides must be updated too.** This spec originally overlooked them, and the
+omission shipped a bug caught only in the final whole-branch review: `AbLang` overrides
+`_process_embeddings_batch` (because it routes heavy and light chains through separate model
+heads), and adding `pooling` to the base signature without updating the override made every
+`AbLang.get_embeddings` call raise `TypeError` — including with `pooling=None`. The failure
+was masked locally because `tests/test_ablang.py` was already failing for an unrelated reason
+(the `ablang` package is not installed in this environment).
+
+The general hazard: `MultiGPUExecutor` forwards method arguments through `**method_kwargs`,
+so any keyword added to a `_process_*_batch` signature must be added to every override of
+that method. `AbLang` is the only such override today. A signature-conformance test now
+asserts that every override stays bind-compatible with its base, and the "Adding a New
+Encoder Model" section of `CLAUDE.md` records the constraint.
+
 **This does not change results.** Batches are currently zero-padded to a global maximum
 length before pooling, and every strategy is invariant to right-padding given the mask:
 `mean_pooling` and `max_pooling` consume the mask directly, `cls_pooling` reads index 0, and

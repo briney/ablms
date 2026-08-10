@@ -1380,7 +1380,13 @@ Task 1. The spec's non-goals (disk offload, `float16`, changes to
 those three methods gain the Task 4 windowing fix for free because they share
 the executor, without any API change.
 
-**Type consistency.** `_process_embeddings_batch(sequences, layer, pooling)`
+**Type consistency.** This section reasoned only about base-class signatures, and that gap
+shipped a bug. `AbLang` overrides `_process_embeddings_batch`, so adding `pooling` to the
+base signature in Task 2 broke every `AbLang.get_embeddings` call with a `TypeError` until
+the final whole-branch review caught it. When a plan changes a signature, check for
+overrides — `grep -rn "def <method_name>" src/` — not just the definition.
+
+`_process_embeddings_batch(sequences, layer, pooling)`
 is defined in Task 2 and consumed unchanged in Task 5. `execute_iter` yields
 `tuple[int, Any]` in Task 4 and is unpacked as `batch_idx, (embeddings, mask,
 offsets)` in Task 5, matching the three-tuple that Task 2 returns.

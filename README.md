@@ -368,8 +368,10 @@ Key features:
 - **Automatic detection**: Uses all available GPUs by default
 - **Lazy initialization**: Worker processes spawn on first inference call
 - **Single-GPU optimization**: No subprocess overhead when using one device
-- **Bounded memory**: At most a few batches per GPU are in flight at once, so
-  memory use does not grow with dataset size
+- **Bounded in-flight memory**: At most a few batches per GPU are in flight at
+  once, so shared memory use does not grow with dataset size. The result
+  `get_embeddings()` returns is still proportional to the dataset - use
+  `iter_embeddings()` when that is the constraint
 - **Progress tracking**: Built-in tqdm progress bar for all inference methods
 
 #### Large datasets
@@ -410,7 +412,7 @@ Two environment variables tune this:
 | Variable | Default | Effect |
 | --- | --- | --- |
 | `ABLMS_SUBMISSION_WINDOW` | `2` | Batches in flight per GPU. Lower to reduce shared memory use, raise to hide scheduling latency. |
-| `ABLMS_WORKER_TIMEOUT` | `300` | Seconds to wait for a batch before raising `SharedMemoryError`. |
+| `ABLMS_WORKER_TIMEOUT` | `300` | Seconds to wait for a batch before failing. Raises `SharedMemoryError` if every worker is still alive, or `MultiGPUError` if a worker has died. |
 
 Disable the progress bar for cleaner output in scripts:
 

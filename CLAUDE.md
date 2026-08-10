@@ -75,6 +75,14 @@ BaseAbLM (abstract base)
 4. Register in `core/config.py::_register_all_models()`
 5. Export from `encoders/__init__.py` and `__init__.py`
 
+**Overriding a `_process_*_batch` method:** if a model needs its own version of
+one of these (AbLang does, because heavy and light chains go through separate
+model heads), the override's signature must stay bind-compatible with the base
+class's. `MultiGPUExecutor.execute()` forwards every extra argument through
+`**method_kwargs` by keyword, so a base-class parameter missing from the
+override becomes a `TypeError` at inference time rather than at import time.
+`tests/test_encoder_contract.py` enforces this with `inspect.signature`.
+
 ### Important Patterns
 
 - **Unified mask token**: All models use `<MASK>` internally. Each model's `_format_for_model()` converts to its native token (`[MASK]`, `_`, `<mask>`, `*`).

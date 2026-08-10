@@ -1,5 +1,7 @@
 """Tests for bounded-memory embedding extraction."""
 
+from __future__ import annotations
+
 import pytest
 import torch
 
@@ -59,18 +61,25 @@ class TestBatchLevelPooling:
         assert mask is not None
 
 
-class TestPooledEmbeddingsUnchanged:
-    """get_embeddings must produce identical values after the refactor."""
+class TestPooledEmbeddingsBatchInvariant:
+    """Pooled values from get_embeddings must not depend on the batch split.
+
+    This compares the current implementation against itself at two batch sizes;
+    it is not a comparison against the pre-refactor implementation. What it
+    pins down is that per-batch pooling is padding-invariant, which is the
+    property that would break if the reduction were sensitive to how much
+    padding a given batch happened to carry.
+    """
 
     @pytest.mark.slow
     @pytest.mark.parametrize("strategy", ["mean", "max", "cls", "first", "last"])
     def test_multi_batch_matches_single_batch(self, esm2_cpu, sequences, strategy):
         """Splitting into batches must not change pooled values.
 
-        Before this change, pooling ran once over the globally padded stack.
-        Now it runs per batch. Processing the same input as one batch and as
-        three batches must agree, which is exactly the property that would
-        break if per-batch pooling were not padding-invariant.
+        Pooling now runs per batch rather than once over a globally padded
+        stack. Processing the same input as one batch and as three batches must
+        agree, which is exactly the property that would break if per-batch
+        pooling were not padding-invariant.
         """
         one_batch = esm2_cpu.get_embeddings(
             sequences, pooling=strategy, batch_size=len(sequences), show_progress=False
