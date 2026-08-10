@@ -14,7 +14,7 @@
 
 - Python 3.10+ union syntax. Write `x | None`, never `Optional[x]`; never import `Optional` or `Union` from `typing`.
 - Type hints on all function signatures. Google-style docstrings on all public classes and functions.
-- Max line length 100. Formatter `black`, linter `ruff check`.
+- Max line length 88 — `pyproject.toml:71,75` configures both `black` and `ruff` at 88, which overrides the 100 in the global style guide. Format with `black src/ tests/` and lint with `ruff check src/ tests/`. Leave pre-existing violations in untouched code alone.
 - Run tests with `python -m pytest`, never bare `pytest` (bare `pytest` resolves to the wrong interpreter in this environment and reports a fake collection failure).
 - Tests requiring model weights are marked `@pytest.mark.slow` and use real sequences from `tests/test_embedding_memory.py`, never synthetic data.
 - `layer=-1` (the default) must remain byte-identical in value, shape, and `EmbeddingOutput.layer` to the pre-change behaviour. This is the acceptance bar for every task.
