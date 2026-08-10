@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import queue
+from collections.abc import Iterator
 from typing import Any, TYPE_CHECKING
 
 import torch
 import torch.multiprocessing as mp
 
 from ablms.parallel.worker import WorkerHandle
-from ablms.parallel.utils import WORKER_TIMEOUT
+from ablms.parallel.utils import DEFAULT_SUBMISSION_WINDOW, WORKER_TIMEOUT
 
 if TYPE_CHECKING:
     from ablms.core.base import BaseAbLM
@@ -88,6 +90,10 @@ class MultiGPUExecutor:
         self._model_init_kwargs = model_init_kwargs
         self._devices = devices
         self._is_single_device = len(devices) == 1
+
+        # Maximum batches outstanding per worker. Bounds how many results can
+        # sit in shared memory at once, independent of dataset size.
+        self._submission_window = DEFAULT_SUBMISSION_WINDOW
 
         # Worker management (initialized lazily)
         self._workers: list[WorkerHandle] | None = None
@@ -180,186 +186,188 @@ class MultiGPUExecutor:
         **method_kwargs: Any,
     ) -> Any:
         """
-        Execute a model method across multiple GPUs.
+        Execute a model method across all devices and combine the results.
 
         Args:
-            method_name: Name of the method to call (e.g., "_process_embeddings_batch").
+            method_name: Name of the method to call (e.g. "_process_embeddings_batch").
             sequences: Input sequences to process.
-            batch_size: Per-GPU batch size.
-            show_progress: Whether to show tqdm progress bar.
-            progress_desc: Optional custom description for progress bar.
+            batch_size: Per-device batch size.
+            show_progress: Whether to show a tqdm progress bar.
+            progress_desc: Optional custom description for the progress bar.
             **method_kwargs: Additional arguments for the method.
 
         Returns:
-            Combined results from all workers (type depends on method).
+            Combined results from all workers (type depends on the method).
+        """
+        results = [
+            result
+            for _, result in self.execute_iter(
+                method_name,
+                sequences,
+                batch_size,
+                show_progress=show_progress,
+                progress_desc=progress_desc,
+                **method_kwargs,
+            )
+        ]
+        return self._combine_results(results)
+
+    def execute_iter(
+        self,
+        method_name: str,
+        sequences: list[AntibodySequence],
+        batch_size: int,
+        show_progress: bool = True,
+        progress_desc: str | None = None,
+        **method_kwargs: Any,
+    ) -> Iterator[tuple[int, Any]]:
+        """
+        Execute a model method, yielding each batch's result as it completes.
+
+        Results are yielded in input order. Nothing is retained between yields,
+        so a caller that consumes and discards each batch holds memory
+        proportional to one batch rather than to the whole dataset.
+
+        Args:
+            method_name: Name of the method to call.
+            sequences: Input sequences to process.
+            batch_size: Per-device batch size.
+            show_progress: Whether to show a tqdm progress bar.
+            progress_desc: Optional custom description for the progress bar.
+            **method_kwargs: Additional arguments for the method.
+
+        Yields:
+            Tuples of (batch_index, result), in ascending batch_index order.
         """
         self._ensure_initialized()
 
-        if self._is_single_device:
-            return self._execute_single(
-                method_name,
-                sequences,
-                batch_size,
-                show_progress,
-                progress_desc,
-                **method_kwargs,
-            )
-        else:
-            return self._execute_multi(
-                method_name,
-                sequences,
-                batch_size,
-                show_progress,
-                progress_desc,
-                **method_kwargs,
-            )
-
-    def _execute_single(
-        self,
-        method_name: str,
-        sequences: list[AntibodySequence],
-        batch_size: int,
-        show_progress: bool,
-        progress_desc: str | None,
-        **method_kwargs: Any,
-    ) -> Any:
-        """Execute on a single GPU (no subprocess overhead)."""
-        from tqdm.auto import tqdm
-
-        method = getattr(self._local_model, method_name)
-        results = []
-
-        # Create batches
         batches = [
             sequences[i : i + batch_size] for i in range(0, len(sequences), batch_size)
         ]
+        if not batches:
+            return
 
-        desc = progress_desc or "Processing"
-        pbar = tqdm(
-            batches,
-            desc=desc,
-            disable=not show_progress,
-        )
+        if self._is_single_device:
+            yield from self._iter_single(
+                method_name, batches, show_progress, progress_desc, **method_kwargs
+            )
+        else:
+            yield from self._iter_multi(
+                method_name, batches, show_progress, progress_desc, **method_kwargs
+            )
 
-        try:
-            for batch in pbar:
-                result = method(batch, **method_kwargs)
-                results.append(result)
-        finally:
-            pbar.close()
-
-        return self._combine_results(results)
-
-    def _execute_multi(
+    def _iter_single(
         self,
         method_name: str,
-        sequences: list[AntibodySequence],
-        batch_size: int,
+        batches: list[list[AntibodySequence]],
         show_progress: bool,
         progress_desc: str | None,
         **method_kwargs: Any,
-    ) -> Any:
-        """Execute with multi-GPU parallelism."""
+    ) -> Iterator[tuple[int, Any]]:
+        """Run batches in-process (no subprocess, no shared memory)."""
         from tqdm.auto import tqdm
-        from ablms.exceptions import WorkerError
 
-        # Distribute work across workers
-        work_assignments = self._distribute_work(sequences, batch_size)
-        total_batches = sum(len(w) for w in work_assignments)
-
-        if total_batches == 0:
-            return self._combine_results([])
-
-        # Submit all tasks to workers
-        task_count = 0
-        task_to_batch_idx = {}  # Map task_id to original batch index
-
-        for worker_idx, assignments in enumerate(work_assignments):
-            for batch_idx, batch in assignments:
-                self._workers[worker_idx].submit_task(
-                    task_id=task_count,
-                    method_name=method_name,
-                    sequences=batch,
-                    kwargs=method_kwargs,
-                )
-                task_to_batch_idx[task_count] = batch_idx
-                task_count += 1
-
-        # Collect results with progress bar
-        results = {}
-        desc = progress_desc or f"Processing ({len(self._devices)} GPUs)"
+        method = getattr(self._local_model, method_name)
         pbar = tqdm(
-            total=total_batches,
-            desc=desc,
+            total=len(batches),
+            desc=progress_desc or "Processing",
             disable=not show_progress,
         )
-
         try:
-            while len(results) < task_count:
-                msg_type, task_id, data = self._result_queue.get(timeout=WORKER_TIMEOUT)
-
-                if msg_type == "result":
-                    batch_idx = task_to_batch_idx[task_id]
-                    results[batch_idx] = data
-                    pbar.update(1)
-
-                elif msg_type == "error":
-                    self._shutdown_workers_fast()
-                    raise WorkerError(
-                        worker_id=data["worker_id"],
-                        original_error=data["exception"],
-                    )
-
-                elif msg_type == "fatal":
-                    self._shutdown_workers_fast()
-                    raise WorkerError(
-                        worker_id=data["worker_id"],
-                        original_error=data["exception"],
-                    )
-
+            for batch_idx, batch in enumerate(batches):
+                result = method(batch, **method_kwargs)
+                pbar.update(1)
+                yield batch_idx, result
         finally:
             pbar.close()
 
-        # Order results by batch index
-        ordered_results = [results[i] for i in range(len(results))]
-
-        return self._combine_results(ordered_results)
-
-    def _distribute_work(
+    def _iter_multi(
         self,
-        sequences: list[AntibodySequence],
-        batch_size: int,
-    ) -> list[list[tuple[int, list[AntibodySequence]]]]:
+        method_name: str,
+        batches: list[list[AntibodySequence]],
+        show_progress: bool,
+        progress_desc: str | None,
+        **method_kwargs: Any,
+    ) -> Iterator[tuple[int, Any]]:
         """
-        Distribute sequences across workers using round-robin.
+        Run batches across worker processes with a bounded submission window.
 
-        Args:
-            sequences: All input sequences.
-            batch_size: Per-GPU batch size.
-
-        Returns:
-            List of work assignments per worker. Each assignment is a list of
-            (batch_index, batch) tuples for ordering results.
+        At most `num_workers * submission_window` batches are outstanding at any
+        moment. Each completed batch releases exactly one new submission, sent
+        back to the worker that just reported in - which both bounds shared
+        memory use and balances load toward whichever device is keeping up.
         """
-        num_workers = len(self._devices)
+        from tqdm.auto import tqdm
 
-        # Create batches with their indices
-        batches = []
-        for i in range(0, len(sequences), batch_size):
-            batch = sequences[i : i + batch_size]
-            batch_idx = len(batches)
-            batches.append((batch_idx, batch))
+        from ablms.exceptions import WorkerError
 
-        # Round-robin distribution
-        worker_assignments: list[list[tuple[int, list[AntibodySequence]]]] = [
-            [] for _ in range(num_workers)
-        ]
+        total = len(batches)
+        num_workers = len(self._workers)
 
-        for i, (batch_idx, batch) in enumerate(batches):
-            worker_idx = i % num_workers
-            worker_assignments[worker_idx].append((batch_idx, batch))
+        task_worker: dict[int, int] = {}
+        pending: dict[int, Any] = {}
+        next_to_submit = 0
+        next_to_yield = 0
 
-        return worker_assignments
+        def submit(batch_idx: int, worker_idx: int) -> None:
+            task_worker[batch_idx] = worker_idx
+            self._workers[worker_idx].submit_task(
+                task_id=batch_idx,
+                method_name=method_name,
+                sequences=batches[batch_idx],
+                kwargs=method_kwargs,
+            )
+
+        pbar = tqdm(
+            total=total,
+            desc=progress_desc or f"Processing ({num_workers} devices)",
+            disable=not show_progress,
+        )
+        try:
+            # Prime the window.
+            for worker_idx in range(num_workers):
+                for _ in range(self._submission_window):
+                    if next_to_submit >= total:
+                        break
+                    submit(next_to_submit, worker_idx)
+                    next_to_submit += 1
+
+            while next_to_yield < total:
+                try:
+                    msg_type, task_id, data = self._result_queue.get(
+                        timeout=WORKER_TIMEOUT
+                    )
+                except queue.Empty:
+                    raise self._stalled_error() from None
+
+                if msg_type in ("error", "fatal"):
+                    self._shutdown_workers_fast()
+                    raise WorkerError(
+                        worker_id=data["worker_id"],
+                        original_error=data["exception"],
+                    )
+
+                # Copy out of shared memory so the worker's segment is freed
+                # as soon as `data` goes out of scope.
+                pending[task_id] = _detach_from_shm(data)
+                del data
+                pbar.update(1)
+
+                worker_idx = task_worker.pop(task_id)
+                if next_to_submit < total:
+                    submit(next_to_submit, worker_idx)
+                    next_to_submit += 1
+
+                while next_to_yield in pending:
+                    yield next_to_yield, pending.pop(next_to_yield)
+                    next_to_yield += 1
+        finally:
+            pbar.close()
+
+    def _stalled_error(self) -> Exception:
+        """Build the error raised when no worker reports within the timeout."""
+        self._shutdown_workers_fast()
+        return TimeoutError(f"No worker returned a result within {WORKER_TIMEOUT}s.")
 
     def _combine_results(self, results: list[Any]) -> Any:
         """

@@ -13,6 +13,7 @@ from ablms.exceptions import DeviceError
 DEFAULT_BATCH_SIZE = int(os.environ.get("ABLMS_DEFAULT_BATCH_SIZE", 32))
 DISABLE_MULTI_GPU = os.environ.get("ABLMS_DISABLE_MULTI_GPU", "").lower() == "true"
 WORKER_TIMEOUT = int(os.environ.get("ABLMS_WORKER_TIMEOUT", 300))
+DEFAULT_SUBMISSION_WINDOW = int(os.environ.get("ABLMS_SUBMISSION_WINDOW", 2))
 
 
 def resolve_devices(

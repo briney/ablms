@@ -6,6 +6,7 @@ from ablms.parallel.utils import (
     resolve_single_device,
     get_device_info,
     DEFAULT_BATCH_SIZE,
+    DEFAULT_SUBMISSION_WINDOW,
     DISABLE_MULTI_GPU,
 )
 
@@ -15,5 +16,6 @@ __all__ = [
     "resolve_single_device",
     "get_device_info",
     "DEFAULT_BATCH_SIZE",
+    "DEFAULT_SUBMISSION_WINDOW",
     "DISABLE_MULTI_GPU",
 ]
