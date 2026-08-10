@@ -11,6 +11,7 @@ from ablms.core.base import BaseAbLM
 from ablms.core.sequence import AntibodySequence
 from ablms.exceptions import UnsupportedOperationError
 from ablms.outputs import AttentionOutput, EmbeddingOutput, LogitsOutput, MaskScanOutput
+from ablms.utils.layers import LayerSelection, resolve_layer_selection
 from ablms.utils.pooling import apply_pooling
 
 
@@ -29,10 +30,30 @@ class EncoderAbLM(BaseAbLM):
     # Whether the model has a masked language modeling head
     has_mlm_head: bool = True
 
+    # Whether the model can return layers other than its final one
+    supports_intermediate_layers: bool = True
+
+    @property
+    def num_layers(self) -> int:
+        """
+        Number of transformer blocks in the loaded model.
+
+        Selectable layer indices run from 0 to num_layers inclusive: index 0 is
+        the embedding-layer output and index i is the output of block i. This
+        matches HuggingFace, where len(hidden_states) == num_hidden_layers + 1.
+
+        Subclasses must override this if their model object does not expose a
+        HuggingFace config with `num_hidden_layers`.
+
+        Returns:
+            Count of transformer blocks.
+        """
+        return self._model.config.num_hidden_layers
+
     def get_embeddings(
         self,
         sequences: str | AntibodySequence | list[str] | list[AntibodySequence],
-        layer: int = -1,
+        layer: LayerSelection = -1,
         pooling: str | None = None,
         batch_size: int = 32,
         show_progress: bool = True,
@@ -42,40 +63,59 @@ class EncoderAbLM(BaseAbLM):
 
         Args:
             sequences: Input sequences in various formats.
-            layer: Layer index to extract embeddings from (-1 for last layer).
+            layer: Which layer(s) to extract. One of:
+                - an int (default -1, the final layer). Index 0 is the
+                  embedding layer and index i is the output of block i.
+                - a list, tuple, or range of ints, which adds a layer axis at
+                  dimension 1.
+                - "all", for every layer in ascending order.
+                A single-element list, tuple, or range still adds the layer
+                axis, so a programmatically built selection has a stable
+                shape.
             pooling: Optional pooling strategy for sequence-level embeddings.
                 If None (default), returns token-level embeddings. Pooling is
-                applied within each batch on the model's device, so pooled runs
-                never materialize the full token-level tensor.
+                applied within each batch on the model's device, and per layer
+                before layers are stacked, so pooled runs never materialize the
+                full token-level tensor.
                 Valid options: "mean", "max", "cls", "first", "last".
             batch_size: Batch size for processing (per GPU when using multi-GPU).
             show_progress: Whether to show a progress bar.
 
         Returns:
-            EmbeddingOutput containing embeddings. Shape is [batch, seq_len, hidden_dim]
-            for token-level (pooling=None) or [batch, hidden_dim] for sequence-level
-            (pooling specified).
+            EmbeddingOutput containing embeddings. Shape is
+            [batch, seq_len, hidden_dim] for token-level (pooling=None) or
+            [batch, hidden_dim] for sequence-level (pooling specified), with a
+            layer axis inserted at dimension 1 when several layers are selected.
+
+        Raises:
+            ValueError: If the layer selection is malformed or out of range.
+            UnsupportedOperationError: If a non-final layer is requested from a
+                model that exposes only its final layer.
+
+        Note:
+            Token-level output for many layers is large: "all" on a 12-block
+            model with hidden_dim 1024 is roughly 13x the single-layer payload.
+            Use iter_embeddings() for anything that will not fit in memory.
+
+        Example:
+            >>> # Every layer, CLS-pooled, as one feature vector per sequence
+            >>> out = model.get_embeddings(seqs, layer="all", pooling="cls")
+            >>> features = out.concat_layers()  # [batch, n_layers * hidden_dim]
         """
         sequences = self._normalize_input(sequences)
         self._validate_input(sequences)
 
+        selection = resolve_layer_selection(
+            layer,
+            self.num_layers,
+            model_name=self.model_name,
+            supports_intermediate_layers=self.supports_intermediate_layers,
+        )
+        layers = None if isinstance(selection, int) else selection
+        single_layer = selection if isinstance(selection, int) else None
+
         if len(sequences) == 0:
-            if pooling is None:
-                return EmbeddingOutput(
-                    embeddings=torch.empty(0, 0, self.embedding_dim),
-                    attention_mask=None,
-                    token_offsets=[],
-                    sequences=[],
-                    layer=layer,
-                )
-            else:
-                return EmbeddingOutput(
-                    embeddings=torch.empty(0, self.embedding_dim),
-                    attention_mask=None,
-                    token_offsets=[],
-                    sequences=[],
-                    layer=layer,
-                )
+            return self._empty_embedding_output(layers, single_layer, pooling)
 
         executor = self._get_executor()
         all_embeddings, all_masks, all_offsets = executor.execute(
@@ -84,33 +124,50 @@ class EncoderAbLM(BaseAbLM):
             batch_size=batch_size,
             show_progress=show_progress,
             progress_desc="Computing embeddings",
-            layer=layer,
+            layer=selection,
             pooling=pooling,
         )
 
-        if pooling is not None:
-            # Already reduced per batch; all_embeddings is [total, hidden_dim].
-            return EmbeddingOutput(
-                embeddings=all_embeddings,
-                attention_mask=None,
-                token_offsets=all_offsets,
-                pooled=all_embeddings,
-                sequences=sequences,
-                layer=layer,
-            )
-
         return EmbeddingOutput(
             embeddings=all_embeddings,
-            attention_mask=all_masks,
+            # Pooling already reduced each batch, so there is no mask to carry.
+            attention_mask=None if pooling is not None else all_masks,
             token_offsets=all_offsets,
+            pooled=all_embeddings if pooling is not None else None,
             sequences=sequences,
-            layer=layer,
+            layer=single_layer,
+            layers=layers,
+        )
+
+    def _empty_embedding_output(
+        self,
+        layers: list[int] | None,
+        single_layer: int | None,
+        pooling: str | None,
+    ) -> EmbeddingOutput:
+        """Build the zero-sequence result with the shape a real run would produce."""
+        shape: tuple[int, ...]
+        if pooling is None:
+            shape = (0, 0, self.embedding_dim)
+        else:
+            shape = (0, self.embedding_dim)
+
+        if layers is not None:
+            shape = (0, len(layers), *shape[1:])
+
+        return EmbeddingOutput(
+            embeddings=torch.empty(*shape),
+            attention_mask=None,
+            token_offsets=[],
+            sequences=[],
+            layer=single_layer,
+            layers=layers,
         )
 
     def _process_embeddings_batch(
         self,
         sequences: list[AntibodySequence],
-        layer: int = -1,
+        layer: int | list[int] = -1,
         pooling: str | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None, list[dict[str, tuple[int, int]]]]:
         """
@@ -125,26 +182,31 @@ class EncoderAbLM(BaseAbLM):
 
         Args:
             sequences: Batch of sequences (already batched by executor).
-            layer: Layer index to extract embeddings from.
+            layer: A single layer index, or a list of resolved non-negative
+                indices. A list adds a layer axis at dimension 1.
             pooling: Optional pooling strategy applied within this batch.
                 One of "mean", "max", "cls", "first", "last", or None for
                 token-level output.
 
         Returns:
-            Tuple of (embeddings, attention_mask, token_offsets). When pooling
-            is applied, embeddings has shape [batch, hidden_dim] and the mask is
-            None; otherwise embeddings has shape [batch, seq_len, hidden_dim].
+            Tuple of (embeddings, attention_mask, token_offsets). The mask is
+            None whenever pooling was applied. Embeddings are
+            [batch, seq_len, hidden_dim], or [batch, hidden_dim] when pooled;
+            a list `layer` inserts a layer axis at dimension 1.
         """
         formatted = self._format_for_model(sequences)
         tokenized = self._tokenize(formatted)
         offsets = self._compute_token_offsets(sequences, tokenized)
-        embeddings, mask = self._forward_embeddings(tokenized, layer)
 
-        if pooling is not None:
-            embeddings = apply_pooling(
-                embeddings, strategy=pooling, attention_mask=mask
-            )
-            mask = None
+        if isinstance(layer, int):
+            embeddings, mask = self._forward_embeddings(tokenized, layer)
+            if pooling is not None:
+                embeddings = apply_pooling(
+                    embeddings, strategy=pooling, attention_mask=mask
+                )
+                mask = None
+        else:
+            embeddings, mask = self._forward_selected_layers(tokenized, layer, pooling)
 
         # Move results to CPU for cross-process transfer
         embeddings = embeddings.cpu()
@@ -153,10 +215,63 @@ class EncoderAbLM(BaseAbLM):
 
         return embeddings, mask, offsets
 
+    def _forward_selected_layers(
+        self,
+        tokenized: dict[str, torch.Tensor],
+        layers: list[int],
+        pooling: str | None,
+    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        """
+        Stack several layers, pooling each one before it is stacked.
+
+        Every encoder already implements `_forward_all_hidden_states`, and the
+        HuggingFace-backed ones compute every layer regardless, so selecting
+        from its output costs nothing over a single-layer forward pass.
+
+        Pooling per layer rather than after stacking means the
+        [batch, layers, seq_len, hidden_dim] tensor is never allocated on
+        pooled runs - only [batch, layers, hidden_dim] survives to cross the
+        result queue. See the "reduce before transfer" note in CLAUDE.md.
+
+        Args:
+            tokenized: Tokenized batch.
+            layers: Resolved non-negative indices, in the order requested.
+            pooling: Optional pooling strategy, applied to each layer.
+
+        Returns:
+            Tuple of (embeddings, attention_mask). Embeddings are
+            [batch, len(layers), hidden_dim] when pooled, else
+            [batch, len(layers), seq_len, hidden_dim]. The mask is None
+            whenever pooling was applied.
+
+        Raises:
+            RuntimeError: If the model's reported num_layers disagrees with the
+                number of hidden states its forward pass returned.
+        """
+        hidden_states, mask = self._forward_all_hidden_states(tokenized)
+
+        expected = self.num_layers + 1
+        if len(hidden_states) != expected:
+            raise RuntimeError(
+                f"{self.model_name} reports num_layers={self.num_layers} "
+                f"({expected} selectable layers), but its forward pass returned "
+                f"{len(hidden_states)} hidden states. The num_layers property "
+                f"needs an override for this model."
+            )
+
+        if pooling is not None:
+            pooled = [
+                apply_pooling(hidden_states[i], strategy=pooling, attention_mask=mask)
+                for i in layers
+            ]
+            return torch.stack(pooled, dim=1), None
+
+        return torch.stack([hidden_states[i] for i in layers], dim=1), mask
+
     def iter_embeddings(
         self,
         sequences: str | AntibodySequence | list[str] | list[AntibodySequence],
-        layer: int = -1,
+        layer: LayerSelection = -1,
         pooling: str | None = None,
         batch_size: int = 32,
         show_progress: bool = True,
@@ -171,7 +286,15 @@ class EncoderAbLM(BaseAbLM):
 
         Args:
             sequences: Input sequences in various formats.
-            layer: Layer index to extract embeddings from (-1 for last layer).
+            layer: Which layer(s) to extract. One of:
+                - an int (default -1, the final layer). Index 0 is the
+                  embedding layer and index i is the output of block i.
+                - a list, tuple, or range of ints, which adds a layer axis at
+                  dimension 1.
+                - "all", for every layer in ascending order.
+                A single-element list, tuple, or range still adds the layer
+                axis, so a programmatically built selection has a stable
+                shape.
             pooling: Optional pooling strategy applied within each batch.
                 Valid options: "mean", "max", "cls", "first", "last".
             batch_size: Batch size for processing (per GPU when using multi-GPU).
@@ -186,6 +309,9 @@ class EncoderAbLM(BaseAbLM):
             PairedSequenceError: If paired sequences are provided but the model
                 does not support them.
             SequenceTooLongError: If a sequence exceeds the model's max length.
+            ValueError: If the layer selection is malformed or out of range.
+            UnsupportedOperationError: If a non-final layer is requested from a
+                model that exposes only its final layer.
 
         Example:
             >>> for batch in model.iter_embeddings(sequences, pooling="mean"):
@@ -196,9 +322,16 @@ class EncoderAbLM(BaseAbLM):
         sequences = self._normalize_input(sequences)
         self._validate_input(sequences)
 
+        selection = resolve_layer_selection(
+            layer,
+            self.num_layers,
+            model_name=self.model_name,
+            supports_intermediate_layers=self.supports_intermediate_layers,
+        )
+
         return self._iter_embeddings(
             sequences=sequences,
-            layer=layer,
+            layer=selection,
             pooling=pooling,
             batch_size=batch_size,
             show_progress=show_progress,
@@ -207,7 +340,7 @@ class EncoderAbLM(BaseAbLM):
     def _iter_embeddings(
         self,
         sequences: list[AntibodySequence],
-        layer: int,
+        layer: int | list[int],
         pooling: str | None,
         batch_size: int,
         show_progress: bool,
@@ -215,6 +348,9 @@ class EncoderAbLM(BaseAbLM):
         """Generator backing iter_embeddings(); assumes validated input."""
         if not sequences:
             return
+
+        layers = None if isinstance(layer, int) else layer
+        single_layer = layer if isinstance(layer, int) else None
 
         executor = self._get_executor()
         for batch_idx, (embeddings, mask, offsets) in executor.execute_iter(
@@ -233,7 +369,8 @@ class EncoderAbLM(BaseAbLM):
                 token_offsets=offsets,
                 pooled=embeddings if pooling is not None else None,
                 sequences=sequences[start : start + batch_size],
-                layer=layer,
+                layer=single_layer,
+                layers=layers,
             )
 
     def get_hidden_states(
@@ -245,13 +382,25 @@ class EncoderAbLM(BaseAbLM):
         """
         Get embeddings from all layers.
 
+        A thin wrapper over `get_embeddings(layer="all")`, kept for backwards
+        compatibility. Prefer `layer="all"` directly: it returns one output with
+        a layer axis, supports pooling, and streams through `iter_embeddings()`.
+        This method materializes the full token-level output for every layer.
+
         Args:
             sequences: Input sequences in various formats.
             batch_size: Batch size for processing (per GPU when using multi-GPU).
             show_progress: Whether to show a progress bar.
 
         Returns:
-            List of EmbeddingOutput objects, one per layer.
+            List of EmbeddingOutput objects, one per layer, in ascending layer
+            order. Models that expose only their final layer return a
+            single-element list.
+
+        Note:
+            Each per-layer output is a view into the stacked multi-layer tensor
+            and shares underlying storage. Holding a single layer's output keeps
+            the entire multi-layer tensor in memory.
         """
         sequences = self._normalize_input(sequences)
         self._validate_input(sequences)
@@ -259,29 +408,31 @@ class EncoderAbLM(BaseAbLM):
         if len(sequences) == 0:
             return []
 
-        executor = self._get_executor()
-        all_hidden_states, all_masks, all_offsets = executor.execute(
-            method_name="_process_hidden_states_batch",
-            sequences=sequences,
+        # A final-layer-only model (AbLang) would raise on "all".
+        selection = "all" if self.supports_intermediate_layers else -1
+        stacked = self.get_embeddings(
+            sequences,
+            layer=selection,
+            pooling=None,
             batch_size=batch_size,
             show_progress=show_progress,
-            progress_desc="Computing hidden states",
         )
 
-        # Create EmbeddingOutput for each layer
-        outputs = []
-        for layer_idx, layer_embeddings in enumerate(all_hidden_states):
-            outputs.append(
-                EmbeddingOutput(
-                    embeddings=layer_embeddings,
-                    attention_mask=all_masks,
-                    token_offsets=all_offsets,
-                    sequences=sequences,
-                    layer=layer_idx,
-                )
-            )
+        if not stacked.is_multi_layer:
+            return [stacked]
 
-        return outputs
+        layers = stacked.layers
+        assert layers is not None  # is_multi_layer guarantees this
+        return [
+            EmbeddingOutput(
+                embeddings=stacked.embeddings[:, position],
+                attention_mask=stacked.attention_mask,
+                token_offsets=stacked.token_offsets,
+                sequences=stacked.sequences,
+                layer=layer_index,
+            )
+            for position, layer_index in enumerate(layers)
+        ]
 
     def _process_hidden_states_batch(
         self,

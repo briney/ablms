@@ -95,13 +95,35 @@ sequences = [
 
 # Get token-level embeddings
 output = model.get_embeddings(sequences)
-print(output.embeddings.shape)  # [2, seq_len, 768]
+print(output.embeddings.shape)  # [2, seq_len, 1024]
 
 # Get sequence-level embeddings with pooling
 # Pooling options are "mean", "max", "cls", "first", and "last" 
 pooled = model.get_embeddings(sequences, pooling="mean")
-print(pooled.embeddings.shape)  # [2, 768]
+print(pooled.embeddings.shape)  # [2, 1024]
 
+# Select several layers, or every layer, by passing a list or "all"
+# A layer axis is inserted at dimension 1
+multi = model.get_embeddings(sequences, layer=[0, 6, 12], pooling="cls")
+print(multi.embeddings.shape)  # [2, 3, 1024]
+print(multi.get_layer(6).shape)  # [2, 1024]
+
+# Concatenate every layer into one feature vector per sequence,
+# the usual input for a UMAP or t-SNE projection
+every = model.get_embeddings(sequences, layer="all", pooling="cls")
+print(every.concat_layers().shape)  # [2, 25 * 1024]
+```
+
+Token-level output for many layers is large — `layer="all"` on BALM's 24-block
+model is roughly 25x the single-layer payload — so pair it with
+`iter_embeddings()` rather than `get_embeddings()` for anything sizeable. Pooled
+multi-layer runs stay small: pooling is applied per layer before the layers are
+stacked.
+
+`AbLang` exposes only its final layer and raises `UnsupportedOperationError` for
+any other selection.
+
+```python
 # Stream batches instead of accumulating, for datasets larger than memory
 for batch in model.iter_embeddings(sequences, pooling="mean", batch_size=64):
     ...  # batch is an EmbeddingOutput covering just this batch
@@ -314,7 +336,7 @@ seq = AntibodySequence(heavy="EVQL<MASK>ESGG")
 
 All methods return structured output objects with helpful properties:
 
-- **`EmbeddingOutput`**: Token or sequence embeddings with `get_chain_embeddings()` for extracting specific chains
+- **`EmbeddingOutput`**: Token or sequence embeddings with `get_chain_embeddings()` for extracting specific chains. Multi-layer results (from `layer=[...]` or `layer="all"`) carry a `layers` list of the resolved indices, plus `get_layer()` and `concat_layers()` for extracting or flattening the layer axis
 - **`LogitsOutput`**: MLM logits with `probabilities`, `predictions`, and `top_k_predictions()`
 - **`AttentionOutput`**: Attention weights with `get_layer()`, `get_head()`, and `get_mean_attention()`
 - **`GenerationOutput`**: Generated sequences with `get_top_k()` and `filter_by_score()`

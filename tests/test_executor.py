@@ -382,3 +382,59 @@ class TestStalledWorkerDiagnostics:
             assert combined.shape[0] == 4
         finally:
             executor.shutdown()
+
+
+class TestPadTensorsToMaxLength:
+    """Padding must not assume which axis carries sequence length.
+
+    It is dim 1 for [batch, seq, hidden] but dim 2 for the multi-layer
+    [batch, layers, seq, hidden]. The rule that covers both: every tensor in a
+    group has the same shape except along the axis that varies, so pad whichever
+    non-batch axes actually differ. Dim 0 is the concatenation axis.
+    """
+
+    @pytest.fixture
+    def executor(self):
+        return MultiGPUExecutor(FakeWorkerModel, {}, [torch.device("cpu")])
+
+    def test_pads_three_dimensional_on_sequence_axis(self, executor):
+        """The pre-existing [batch, seq, hidden] behaviour is unchanged."""
+        tensors = [torch.ones(2, 5, 4), torch.ones(3, 7, 4)]
+        padded = executor._pad_tensors_to_max_length(tensors)
+
+        assert [tuple(t.shape) for t in padded] == [(2, 7, 4), (3, 7, 4)]
+        assert torch.cat(padded, dim=0).shape == (5, 7, 4)
+        assert padded[0][:, 5:, :].eq(0).all()
+
+    def test_pads_two_dimensional_mask(self, executor):
+        """[batch, seq] attention masks are padded the same way."""
+        padded = executor._pad_tensors_to_max_length(
+            [torch.ones(2, 5), torch.ones(3, 7)]
+        )
+        assert [tuple(t.shape) for t in padded] == [(2, 7), (3, 7)]
+
+    def test_pads_four_dimensional_on_sequence_axis(self, executor):
+        """[batch, layers, seq, hidden] pads dim 2, leaving the layer axis alone."""
+        tensors = [torch.ones(2, 3, 5, 4), torch.ones(1, 3, 7, 4)]
+        padded = executor._pad_tensors_to_max_length(tensors)
+
+        assert [tuple(t.shape) for t in padded] == [(2, 3, 7, 4), (1, 3, 7, 4)]
+        assert torch.cat(padded, dim=0).shape == (3, 3, 7, 4)
+        assert padded[0][:, :, 5:, :].eq(0).all()
+
+    def test_leaves_batch_axis_alone(self, executor):
+        """Dim 0 is the concatenation axis and must never be padded."""
+        padded = executor._pad_tensors_to_max_length(
+            [torch.ones(2, 5, 4), torch.ones(3, 5, 4)]
+        )
+        assert [tuple(t.shape) for t in padded] == [(2, 5, 4), (3, 5, 4)]
+
+    def test_returns_unchanged_when_nothing_differs(self, executor):
+        tensors = [torch.ones(2, 5, 4), torch.ones(2, 5, 4)]
+        padded = executor._pad_tensors_to_max_length(tensors)
+        assert [tuple(t.shape) for t in padded] == [(2, 5, 4), (2, 5, 4)]
+
+    def test_empty_and_one_dimensional_are_passed_through(self, executor):
+        assert executor._pad_tensors_to_max_length([]) == []
+        singles = [torch.ones(3), torch.ones(5)]
+        assert executor._pad_tensors_to_max_length(singles) is singles
