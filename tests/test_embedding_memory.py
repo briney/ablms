@@ -93,6 +93,71 @@ class TestPooledEmbeddingsUnchanged:
         assert len(output.token_offsets) == len(sequences)
 
 
+class TestIterEmbeddings:
+    """Streaming embeddings yield per batch and agree with get_embeddings."""
+
+    @pytest.mark.slow
+    def test_yields_one_output_per_batch(self, esm2_cpu, sequences):
+        outputs = list(
+            esm2_cpu.iter_embeddings(sequences, batch_size=2, show_progress=False)
+        )
+        assert len(outputs) == 3  # 5 sequences at batch_size 2
+        assert [len(o) for o in outputs] == [2, 2, 1]
+        assert all(o.sequences is not None for o in outputs)
+        assert outputs[0].sequences[0] is sequences[0]
+        assert outputs[2].sequences[0] is sequences[4]
+
+    @pytest.mark.slow
+    def test_pooled_stream_matches_get_embeddings(self, esm2_cpu, sequences):
+        streamed = torch.cat(
+            [
+                o.embeddings
+                for o in esm2_cpu.iter_embeddings(
+                    sequences, pooling="mean", batch_size=2, show_progress=False
+                )
+            ]
+        )
+        combined = esm2_cpu.get_embeddings(
+            sequences, pooling="mean", batch_size=2, show_progress=False
+        )
+        assert torch.allclose(streamed, combined.embeddings, atol=1e-6)
+
+    @pytest.mark.slow
+    def test_token_level_stream_matches_get_embeddings(self, esm2_cpu, sequences):
+        """Compare per sequence, not per tensor.
+
+        get_embeddings pads every batch to a single global maximum length,
+        while each streamed batch is padded only to its own maximum. Both
+        describe the same embeddings, so compare with get_sequence_tokens(),
+        which strips padding via the attention mask.
+        """
+        streamed = [
+            tokens
+            for output in esm2_cpu.iter_embeddings(
+                sequences, batch_size=2, show_progress=False
+            )
+            for tokens in output
+        ]
+        combined = esm2_cpu.get_embeddings(sequences, batch_size=2, show_progress=False)
+
+        assert len(streamed) == len(sequences)
+        for i, tokens in enumerate(streamed):
+            assert torch.allclose(tokens, combined.get_sequence_tokens(i), atol=1e-6)
+
+    @pytest.mark.slow
+    def test_validation_is_eager(self, esm2_cpu):
+        """Invalid input must raise on call, not on first next()."""
+        from ablms import PairedSequenceError
+
+        paired = AntibodySequence(heavy=HEAVY_CHAINS[0], light="DIQMTQSPSSLSASVGDRV")
+        with pytest.raises(PairedSequenceError):
+            esm2_cpu.iter_embeddings([paired], show_progress=False)
+
+    @pytest.mark.slow
+    def test_empty_input_yields_nothing(self, esm2_cpu):
+        assert list(esm2_cpu.iter_embeddings([], show_progress=False)) == []
+
+
 class TestRaggedBatchTokenLevel:
     """get_embeddings(pooling=None) must survive batches padded to different lengths.
 

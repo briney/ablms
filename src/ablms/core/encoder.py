@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-from typing import Any
+from collections.abc import Iterator
 
 import torch
 
@@ -152,6 +152,89 @@ class EncoderAbLM(BaseAbLM):
             mask = mask.cpu()
 
         return embeddings, mask, offsets
+
+    def iter_embeddings(
+        self,
+        sequences: str | AntibodySequence | list[str] | list[AntibodySequence],
+        layer: int = -1,
+        pooling: str | None = None,
+        batch_size: int = 32,
+        show_progress: bool = True,
+    ) -> Iterator[EmbeddingOutput]:
+        """
+        Stream embeddings one batch at a time.
+
+        Unlike get_embeddings(), nothing is accumulated: each batch is yielded
+        as soon as it is ready and released once the caller is done with it.
+        Use this when the full token-level output for the dataset would not fit
+        in memory, writing each batch to HDF5, zarr, or npy as it arrives.
+
+        Args:
+            sequences: Input sequences in various formats.
+            layer: Layer index to extract embeddings from (-1 for last layer).
+            pooling: Optional pooling strategy applied within each batch.
+                Valid options: "mean", "max", "cls", "first", "last".
+            batch_size: Batch size for processing (per GPU when using multi-GPU).
+            show_progress: Whether to show a progress bar.
+
+        Yields:
+            One EmbeddingOutput per batch, in input order. Each carries its own
+            slice of the input sequences and its own token offsets, so batches
+            are self-describing.
+
+        Raises:
+            PairedSequenceError: If paired sequences are provided but the model
+                does not support them.
+            SequenceTooLongError: If a sequence exceeds the model's max length.
+
+        Example:
+            >>> for batch in model.iter_embeddings(sequences, pooling="mean"):
+            ...     writer.append(batch.embeddings.numpy())
+        """
+        # Validate eagerly rather than on first next(), so bad input fails at
+        # the call site.
+        sequences = self._normalize_input(sequences)
+        self._validate_input(sequences)
+
+        return self._iter_embeddings(
+            sequences=sequences,
+            layer=layer,
+            pooling=pooling,
+            batch_size=batch_size,
+            show_progress=show_progress,
+        )
+
+    def _iter_embeddings(
+        self,
+        sequences: list[AntibodySequence],
+        layer: int,
+        pooling: str | None,
+        batch_size: int,
+        show_progress: bool,
+    ) -> Iterator[EmbeddingOutput]:
+        """Generator backing iter_embeddings(); assumes validated input."""
+        if not sequences:
+            return
+
+        executor = self._get_executor()
+        for batch_idx, (embeddings, mask, offsets) in executor.execute_iter(
+            method_name="_process_embeddings_batch",
+            sequences=sequences,
+            batch_size=batch_size,
+            show_progress=show_progress,
+            progress_desc="Computing embeddings",
+            layer=layer,
+            pooling=pooling,
+        ):
+            start = batch_idx * batch_size
+            yield EmbeddingOutput(
+                embeddings=embeddings,
+                attention_mask=mask,
+                token_offsets=offsets,
+                pooled=embeddings if pooling is not None else None,
+                sequences=sequences[start : start + batch_size],
+                layer=layer,
+            )
 
     def get_hidden_states(
         self,
