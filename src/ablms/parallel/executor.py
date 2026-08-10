@@ -517,34 +517,50 @@ class MultiGPUExecutor:
         self, tensors: list[torch.Tensor]
     ) -> list[torch.Tensor]:
         """
-        Pad tensors to max sequence length for concatenation.
+        Pad tensors so they agree on every axis except the concatenation axis.
 
-        When batches are tokenized separately, they may have different sequence
-        lengths due to per-batch padding. This method pads shorter tensors with
-        zeros to match the maximum sequence length across all tensors.
+        Batches are tokenized independently, so they pad to different sequence
+        lengths and cannot be concatenated as-is. Rather than assume which axis
+        carries sequence length - dim 1 for [batch, seq, hidden], dim 2 for the
+        multi-layer [batch, layers, seq, hidden] - pad whichever non-batch axes
+        actually differ across the group. Dimension 0 is the concatenation axis
+        and is left alone.
 
         Args:
-            tensors: List of tensors to pad.
+            tensors: List of tensors to pad. All must have the same rank.
 
         Returns:
-            List of tensors with uniform sequence length (dimension 1).
+            List of tensors that differ only along dimension 0.
+
+        Raises:
+            ValueError: If the tensors do not all have the same rank.
         """
         if not tensors or tensors[0].dim() < 2:
             return tensors
 
-        max_seq_len = max(t.shape[1] for t in tensors)
+        ndim = tensors[0].dim()
+        if any(t.dim() != ndim for t in tensors):
+            ranks = sorted({t.dim() for t in tensors})
+            raise ValueError(
+                f"Cannot pad tensors of differing rank for concatenation: got "
+                f"ranks {ranks}. This usually means a worker returned an "
+                f"unexpected shape."
+            )
+
+        max_sizes = [max(t.shape[d] for t in tensors) for d in range(ndim)]
+
         padded = []
-        for t in tensors:
-            if t.shape[1] < max_seq_len:
-                pad_size = max_seq_len - t.shape[1]
-                if t.dim() == 3:  # [batch, seq, hidden]
-                    padding = torch.zeros(
-                        t.shape[0], pad_size, t.shape[2], dtype=t.dtype
-                    )
-                else:  # [batch, seq]
-                    padding = torch.zeros(t.shape[0], pad_size, dtype=t.dtype)
-                t = torch.cat([t, padding], dim=1)
-            padded.append(t)
+        for tensor in tensors:
+            # F.pad reads dimensions last-to-first, two entries (before, after)
+            # per dimension. Stopping at 1 leaves the batch axis unpadded.
+            pad_spec: list[int] = []
+            for dim in range(ndim - 1, 0, -1):
+                pad_spec.extend([0, max_sizes[dim] - tensor.shape[dim]])
+
+            if any(pad_spec):
+                tensor = torch.nn.functional.pad(tensor, pad_spec)
+            padded.append(tensor)
+
         return padded
 
     def _combine_tuple_results(self, results: list[tuple[Any, ...]]) -> tuple[Any, ...]:
