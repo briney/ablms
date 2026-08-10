@@ -413,9 +413,57 @@ class MultiGPUExecutor:
                 break
 
     def _stalled_error(self) -> Exception:
-        """Build the error raised when no worker reports within the timeout."""
+        """
+        Build the error raised when no worker reports within the timeout.
+
+        The shared-memory failure that usually causes this is raised inside the
+        result queue's feeder thread, which is outside the worker's own
+        exception handling, so it never arrives as a WorkerError. What the
+        parent observes is simply a result that never comes while every worker
+        process is still healthy.
+
+        Returns:
+            SharedMemoryError when all workers are alive, MultiGPUError when
+            one or more has died silently.
+        """
+        import shutil
+
+        from ablms.exceptions import MultiGPUError, SharedMemoryError
+
+        dead = [w.worker_id for w in self._workers if not w.is_alive]
         self._shutdown_workers_fast()
-        return TimeoutError(f"No worker returned a result within {WORKER_TIMEOUT}s.")
+
+        if dead:
+            return MultiGPUError(
+                f"No result received within {WORKER_TIMEOUT}s and worker(s) "
+                f"{dead} are no longer running. The worker process died without "
+                f"reporting an error, which usually means it was killed by the "
+                f"OS (out of memory) or crashed in a native extension."
+            )
+
+        try:
+            free_gb = shutil.disk_usage("/dev/shm").free / 1e9
+            shm_note = f"{free_gb:.2f} GB free on /dev/shm"
+        except OSError:
+            shm_note = "/dev/shm could not be inspected"
+
+        return SharedMemoryError(
+            f"No result received from any worker within {WORKER_TIMEOUT}s, but "
+            f"every worker is still alive ({shm_note}).\n\n"
+            f"This almost always means a worker could not allocate shared "
+            f"memory to hand its result back. torch.multiprocessing transfers "
+            f"CPU tensors through /dev/shm, and that failure is raised in the "
+            f"queue's feeder thread, so it cannot be reported as a worker "
+            f"error - the result is simply lost.\n\n"
+            f"Remedies, roughly in order of effectiveness:\n"
+            f"  - Pass pooling= to get_embeddings() to reduce each batch before "
+            f"it is transferred.\n"
+            f"  - Stream with iter_embeddings() instead of accumulating.\n"
+            f"  - Reduce batch_size.\n"
+            f"  - If running in a container, raise --shm-size (the Docker "
+            f"default is only 64 MB).\n"
+            f"  - Set ABLMS_DISABLE_MULTI_GPU=true to avoid the queue entirely."
+        )
 
     def _combine_results(self, results: list[Any]) -> Any:
         """
@@ -534,7 +582,16 @@ class MultiGPUExecutor:
         return tuple(combined)
 
     def _shutdown_workers_fast(self) -> None:
-        """Quickly terminate all workers (used on error)."""
+        """
+        Quickly terminate all workers and clear worker state (used on error).
+
+        Unlike shutdown(), this skips the graceful join and drops straight to
+        terminate() - the caller has already given up on a clean shutdown.
+        Clearing self._workers still matters: leaving it set would make
+        is_initialized keep reporting True for processes that no longer exist,
+        so the next call would submit tasks nothing can consume and hang for
+        another WORKER_TIMEOUT before failing again.
+        """
         if self._workers is None:
             return
 
@@ -543,6 +600,8 @@ class MultiGPUExecutor:
                 worker.process.terminate()
             except Exception:
                 pass
+
+        self._workers = None
 
     def shutdown(self) -> None:
         """Gracefully shut down all workers."""

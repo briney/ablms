@@ -94,3 +94,9 @@ class WorkerInitializationError(MultiGPUError):
     """Raised when workers fail to initialize."""
 
     pass
+
+
+class SharedMemoryError(MultiGPUError):
+    """Raised when workers appear unable to return results via shared memory."""
+
+    pass

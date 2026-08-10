@@ -62,6 +62,7 @@ from ablms.exceptions import (
     TokenizationError,
     MaskError,
     DeviceError,
+    SharedMemoryError,
 )
 
 # Encoder models
@@ -115,6 +116,7 @@ __all__ = [
     "TokenizationError",
     "MaskError",
     "DeviceError",
+    "SharedMemoryError",
     # Encoder models
     "IgBERT",
     "IgT5",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 
 import pytest
@@ -207,3 +208,100 @@ class TestExecuteIterOrdering:
 
         assert torch.equal(combined[:, 0], torch.arange(6, dtype=torch.float32))
         assert len(offsets) == 6
+
+
+class TestStalledWorkerDiagnostics:
+    """A result-queue timeout must name shared memory as the likely cause."""
+
+    def test_shared_memory_error_is_exported(self):
+        from ablms import SharedMemoryError
+        from ablms.exceptions import MultiGPUError
+
+        assert issubclass(SharedMemoryError, MultiGPUError)
+
+    @pytest.mark.slow
+    def test_stall_message_is_actionable(self):
+        from ablms import SharedMemoryError
+
+        executor = _cpu_executor(1)
+        # Force the multi-device path with a single worker, then make the
+        # timeout immediate so no result can arrive in time.
+        executor._is_single_device = False
+        try:
+            executor._ensure_initialized()
+            error = executor._stalled_error()
+        finally:
+            executor.shutdown()
+
+        assert isinstance(error, SharedMemoryError)
+        message = str(error)
+        assert "shm-size" in message
+        assert "batch_size" in message
+        assert "iter_embeddings" in message
+
+    @pytest.mark.slow
+    def test_dead_worker_message_differs_from_shared_memory_message(self):
+        """A worker that died outright is a different failure than a live one
+        that simply couldn't hand back a result - the message must say so."""
+        from ablms import SharedMemoryError
+        from ablms.exceptions import MultiGPUError
+
+        executor = _cpu_executor(1)
+        executor._is_single_device = False
+        try:
+            executor._ensure_initialized()
+            executor._workers[0].process.terminate()
+            executor._workers[0].process.join(timeout=5)
+
+            error = executor._stalled_error()
+        finally:
+            executor.shutdown()
+
+        assert not isinstance(error, SharedMemoryError)
+        assert isinstance(error, MultiGPUError)
+        message = str(error)
+        assert "no longer running" in message
+        assert "shm-size" not in message
+
+    @pytest.mark.slow
+    def test_second_call_after_stall_does_not_hang(self):
+        """A stall must leave the executor able to recover, not stuck.
+
+        _shutdown_workers_fast used to terminate the worker processes without
+        clearing self._workers, so is_initialized kept reporting True for
+        processes that no longer existed. The next call would then submit
+        tasks nothing could ever consume and block for another full
+        WORKER_TIMEOUT. The thread + join(timeout=...) below turns a
+        regression into a fast test failure instead of a 300s hang.
+        """
+        executor = _cpu_executor(1)
+        executor._is_single_device = False
+        try:
+            executor._ensure_initialized()
+            executor._stalled_error()
+            assert not executor.is_initialized
+
+            outcome: dict[str, object] = {}
+
+            def _second_call() -> None:
+                try:
+                    outcome["result"] = executor.execute(
+                        method_name="_process_echo_batch",
+                        sequences=list(range(4)),
+                        batch_size=2,
+                        show_progress=False,
+                    )
+                except Exception as exc:  # noqa: BLE001 - reported, not raised
+                    outcome["error"] = exc
+
+            thread = threading.Thread(target=_second_call, daemon=True)
+            thread.start()
+            thread.join(timeout=30)
+
+            assert not thread.is_alive(), "second call after a stall hung"
+            assert "error" not in outcome, f"second call failed: {outcome.get('error')}"
+
+            combined, _, _ = outcome["result"]
+            assert combined.shape[0] == 4
+        finally:
+            executor.shutdown()
