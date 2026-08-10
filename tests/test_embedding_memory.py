@@ -417,3 +417,36 @@ class TestMultiLayerIterEmbeddings:
         """Like sequence validation, this must raise on call, not on first next()."""
         with pytest.raises(ValueError, match="out of range"):
             esm2_cpu.iter_embeddings(sequences, layer=999, show_progress=False)
+
+
+class TestGetHiddenStates:
+    """The wrapper must return exactly what the standalone path used to."""
+
+    @pytest.mark.slow
+    def test_returns_one_output_per_layer(self, esm2_cpu, sequences):
+        outputs = esm2_cpu.get_hidden_states(sequences, show_progress=False)
+
+        assert len(outputs) == esm2_cpu.num_layers + 1
+        assert [o.layer for o in outputs] == list(range(esm2_cpu.num_layers + 1))
+        assert all(not o.is_multi_layer for o in outputs)
+
+    @pytest.mark.slow
+    def test_each_output_is_token_level(self, esm2_cpu, sequences):
+        outputs = esm2_cpu.get_hidden_states(sequences, show_progress=False)
+
+        for output in outputs:
+            assert output.embeddings.dim() == 3
+            assert output.embeddings.shape[0] == len(sequences)
+            assert output.embeddings.shape[2] == esm2_cpu.embedding_dim
+            assert output.attention_mask is not None
+
+    @pytest.mark.slow
+    def test_matches_get_embeddings_for_the_same_layer(self, esm2_cpu, sequences):
+        outputs = esm2_cpu.get_hidden_states(sequences, show_progress=False)
+        direct = esm2_cpu.get_embeddings(sequences, layer=3, show_progress=False)
+
+        assert torch.allclose(outputs[3].embeddings, direct.embeddings, atol=1e-6)
+
+    @pytest.mark.slow
+    def test_empty_input_returns_empty_list(self, esm2_cpu):
+        assert esm2_cpu.get_hidden_states([]) == []

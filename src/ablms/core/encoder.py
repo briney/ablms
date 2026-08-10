@@ -378,13 +378,20 @@ class EncoderAbLM(BaseAbLM):
         """
         Get embeddings from all layers.
 
+        A thin wrapper over `get_embeddings(layer="all")`, kept for backwards
+        compatibility. Prefer `layer="all"` directly: it returns one output with
+        a layer axis, supports pooling, and streams through `iter_embeddings()`.
+        This method materializes the full token-level output for every layer.
+
         Args:
             sequences: Input sequences in various formats.
             batch_size: Batch size for processing (per GPU when using multi-GPU).
             show_progress: Whether to show a progress bar.
 
         Returns:
-            List of EmbeddingOutput objects, one per layer.
+            List of EmbeddingOutput objects, one per layer, in ascending layer
+            order. Models that expose only their final layer return a
+            single-element list.
         """
         sequences = self._normalize_input(sequences)
         self._validate_input(sequences)
@@ -392,29 +399,29 @@ class EncoderAbLM(BaseAbLM):
         if len(sequences) == 0:
             return []
 
-        executor = self._get_executor()
-        all_hidden_states, all_masks, all_offsets = executor.execute(
-            method_name="_process_hidden_states_batch",
-            sequences=sequences,
+        # A final-layer-only model (AbLang) would raise on "all".
+        selection = "all" if self.supports_intermediate_layers else -1
+        stacked = self.get_embeddings(
+            sequences,
+            layer=selection,
+            pooling=None,
             batch_size=batch_size,
             show_progress=show_progress,
-            progress_desc="Computing hidden states",
         )
 
-        # Create EmbeddingOutput for each layer
-        outputs = []
-        for layer_idx, layer_embeddings in enumerate(all_hidden_states):
-            outputs.append(
-                EmbeddingOutput(
-                    embeddings=layer_embeddings,
-                    attention_mask=all_masks,
-                    token_offsets=all_offsets,
-                    sequences=sequences,
-                    layer=layer_idx,
-                )
-            )
+        if not stacked.is_multi_layer:
+            return [stacked]
 
-        return outputs
+        return [
+            EmbeddingOutput(
+                embeddings=stacked.embeddings[:, position],
+                attention_mask=stacked.attention_mask,
+                token_offsets=stacked.token_offsets,
+                sequences=stacked.sequences,
+                layer=layer_index,
+            )
+            for position, layer_index in enumerate(stacked.layers)
+        ]
 
     def _process_hidden_states_batch(
         self,
