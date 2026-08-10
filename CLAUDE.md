@@ -81,6 +81,13 @@ BaseAbLM (abstract base)
 - **Input normalization**: `_normalize_input()` in `BaseAbLM` accepts strings, `AntibodySequence`, or lists of either.
 - **Token offsets**: `_compute_token_offsets()` returns chain positions for extracting chain-specific embeddings from output tensors.
 - **Batch processing methods**: Public methods call executor; `_process_*_batch()` methods are called by workers and should not parallelize further.
+- **Reduce before transfer**: `_process_*_batch()` methods run in worker processes and
+  return through a queue backed by `/dev/shm`. Any reduction that shrinks the result
+  (pooling, scoring) belongs inside the batch method, before `.cpu()`, not after the
+  executor concatenates. See `EncoderAbLM._process_embeddings_batch`.
+- **Streaming variants**: `MultiGPUExecutor.execute_iter()` yields `(batch_index, result)`
+  in input order with a bounded submission window; `execute()` is a thin wrapper that
+  combines it. Public streaming APIs (e.g. `iter_embeddings()`) build on `execute_iter`.
 
 ### Output Classes
 
