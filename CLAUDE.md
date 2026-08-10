@@ -65,7 +65,11 @@ BaseAbLM (abstract base)
 ### Adding a New Encoder Model
 
 1. Create `src/ablms/encoders/yourmodel.py` inheriting from `EncoderAbLM`
-2. Set class attributes: `model_name`, `supports_paired`, `max_length`, `embedding_dim`, `mask_token`, `separator`, `has_mlm_head`
+2. Set class attributes: `model_name`, `supports_paired`, `max_length`, `embedding_dim`,
+   `mask_token`, `separator`, `has_mlm_head`. Override the `num_layers` property if the
+   model object does not expose a HuggingFace config with `num_hidden_layers` (IgT5 and
+   AbLang2 do), and set `supports_intermediate_layers = False` if only the final layer is
+   reachable (AbLang).
 3. Implement abstract methods:
    - `_load_model()`: Load model and tokenizer
    - `_format_for_model()`: Convert `<MASK>` to model-specific token, join chains
@@ -96,11 +100,20 @@ override becomes a `TypeError` at inference time rather than at import time.
 - **Streaming variants**: `MultiGPUExecutor.execute_iter()` yields `(batch_index, result)`
   in input order with a bounded submission window; `execute()` is a thin wrapper that
   combines it. Public streaming APIs (e.g. `iter_embeddings()`) build on `execute_iter`.
+- **Layer selection**: `get_embeddings(layer=...)` accepts an int, a list of ints, or
+  `"all"`. `utils/layers.py::resolve_layer_selection` validates and resolves it in the
+  parent before dispatch; a list return means the batch method stacks a layer axis at
+  dimension 1. Multi-layer requests route through `_forward_all_hidden_states()`, which
+  every encoder already implements, so no encoder needs a multi-layer forward pass. Pooling
+  is applied per layer *before* stacking, so the token-level tensor is never built on
+  pooled runs.
 
 ### Output Classes
 
 Located in `outputs/`:
-- `EmbeddingOutput`: Token/sequence embeddings with `get_chain_embeddings()`
+- `EmbeddingOutput`: Token/sequence embeddings with `get_chain_embeddings()`. Multi-layer
+  results carry a layer axis at dimension 1, `layers` listing the resolved indices, and
+  `get_layer()` / `concat_layers()` for extracting or flattening it.
 - `LogitsOutput`: MLM logits with `probabilities`, `predictions`, `top_k_predictions()`
 - `AttentionOutput`: Attention weights with `get_layer()`, `get_head()`, `get_mean_attention()`
 - `GenerationOutput`: Generated sequences with `get_top_k()`, `filter_by_score()`

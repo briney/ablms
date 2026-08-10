@@ -115,6 +115,14 @@ class EmbeddingOutput:
 
         Raises:
             ValueError: If this output holds a single layer.
+
+        Note:
+            Requires torch tensors: this uses `permute`/`flatten`, which
+            `numpy.ndarray` does not support. Call this before `.numpy()`,
+            not after - `get_layer()`, `get_chain_embeddings()`, and
+            `get_sequence_tokens()` all still work post-`.numpy()` because
+            they only slice, but `concat_layers()` will raise a plain
+            `AttributeError` if called on a numpy-backed output.
         """
         if self.layers is None:
             raise ValueError(
