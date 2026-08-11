@@ -129,7 +129,7 @@ class AbLang(EncoderAbLM):
         """
         formatted = []
         for seq in sequences:
-            sequence = seq.heavy_chain or seq.light_chain
+            sequence = seq.primary_chain
 
             # Convert unified mask token to AbLang mask token
             sequence = sequence.replace(AntibodySequence.MASK_TOKEN, self.mask_token)

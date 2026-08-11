@@ -103,7 +103,7 @@ class ESM2(EncoderAbLM):
         formatted = []
         for seq in sequences:
             # ESM-2 only supports unpaired sequences
-            sequence = seq.heavy_chain or seq.light_chain
+            sequence = seq.primary_chain
 
             # Convert unified mask token to ESM-2 mask token
             sequence = sequence.replace(AntibodySequence.MASK_TOKEN, self.mask_token)
