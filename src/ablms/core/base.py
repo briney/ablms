@@ -256,7 +256,7 @@ class BaseAbLM(ABC):
         pass
 
     @abstractmethod
-    def _tokenize(self, formatted_sequences: list[str]) -> dict[str, Any]:
+    def _tokenize(self, formatted_sequences: list[str]) -> dict[str, torch.Tensor]:
         """
         Tokenize formatted sequences.
 
@@ -265,9 +265,6 @@ class BaseAbLM(ABC):
 
         Returns:
             Dictionary of tokenized tensors (input_ids, attention_mask, etc.).
-            Generative models may instead return a payload of non-tensor
-            values (e.g. raw strings) when tokenization is handled internally
-            by the underlying package.
         """
         pass
 
