@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import warnings
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 
@@ -194,13 +194,12 @@ class BaseAbLM(ABC):
             if not sequences:
                 return []
 
-            # List of strings
+            # Element 0 is representative; a mixed list is a caller error.
             if isinstance(sequences[0], str):
-                return [AntibodySequence(heavy=s) for s in sequences]
+                return [AntibodySequence(heavy=s) for s in cast("list[str]", sequences)]
 
-            # List of AntibodySequence
             if isinstance(sequences[0], AntibodySequence):
-                return sequences
+                return cast("list[AntibodySequence]", sequences)
 
         raise ValidationError(
             f"Invalid input type: {type(sequences)}. Expected str, "

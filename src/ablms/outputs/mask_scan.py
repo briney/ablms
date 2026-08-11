@@ -225,6 +225,29 @@ class MaskScanOutput:
             return result.item()
         return result
 
+    def _combined_mask(self, mask: torch.Tensor | None) -> torch.Tensor:
+        """Combine the attention mask with an optional user mask."""
+        if mask is None:
+            return self.attention_mask
+        return self.attention_mask & mask.to(self.attention_mask.device)
+
+    def _accuracy_values(self, combined_mask: torch.Tensor) -> torch.Tensor:
+        """Per-position accuracy, zeroed at invalid positions."""
+        correct = (self.predictions == self.original_token_ids).float()
+        return correct * combined_mask.float()
+
+    def _perplexity_values(self, combined_mask: torch.Tensor) -> torch.Tensor:
+        """Per-position perplexity, zeroed at invalid positions."""
+        original_log_probs = self.log_probabilities.gather(
+            dim=-1, index=self.original_token_ids.unsqueeze(-1)
+        ).squeeze(-1)
+        return torch.exp(-original_log_probs) * combined_mask.float()
+
+    def _entropy_values(self, combined_mask: torch.Tensor) -> torch.Tensor:
+        """Per-position entropy, zeroed at invalid positions."""
+        ent = -torch.sum(self.probabilities * self.log_probabilities, dim=-1)
+        return ent * combined_mask.float()
+
     def accuracy(
         self,
         mask: torch.Tensor | None = None,
@@ -246,15 +269,8 @@ class MaskScanOutput:
             prediction matches original, 0.0 otherwise), else aggregated scalar.
             Invalid positions (where attention_mask is False) are 0.0.
         """
-        correct = (self.predictions == self.original_token_ids).float()
-
-        # Combine attention_mask with user mask
-        combined_mask = self.attention_mask
-        if mask is not None:
-            combined_mask = self.attention_mask & mask.to(self.attention_mask.device)
-
-        values = correct * combined_mask.float()
-        return self._aggregate(values, combined_mask, agg)
+        combined_mask = self._combined_mask(mask)
+        return self._aggregate(self._accuracy_values(combined_mask), combined_mask, agg)
 
     def perplexity(
         self,
@@ -278,21 +294,10 @@ class MaskScanOutput:
             Per-position tensor if agg=None (shape [seq_len]), else aggregated scalar.
             Invalid positions have perplexity of 0.0.
         """
-        log_probs = self.log_probabilities
-        # Gather log probability of the original token at each position
-        original_log_probs = log_probs.gather(
-            dim=-1, index=self.original_token_ids.unsqueeze(-1)
-        ).squeeze(-1)
-        # Perplexity = exp(-log_prob)
-        ppl = torch.exp(-original_log_probs)
-
-        # Combine attention_mask with user mask
-        combined_mask = self.attention_mask
-        if mask is not None:
-            combined_mask = self.attention_mask & mask.to(self.attention_mask.device)
-
-        values = ppl * combined_mask.float()
-        return self._aggregate(values, combined_mask, agg)
+        combined_mask = self._combined_mask(mask)
+        return self._aggregate(
+            self._perplexity_values(combined_mask), combined_mask, agg
+        )
 
     def entropy(
         self,
@@ -316,18 +321,8 @@ class MaskScanOutput:
             Per-position tensor if agg=None (shape [seq_len]), else aggregated scalar.
             Invalid positions have entropy of 0.0.
         """
-        probs = self.probabilities
-        log_probs = self.log_probabilities
-        # Entropy = -sum(p * log(p))
-        ent = -torch.sum(probs * log_probs, dim=-1)
-
-        # Combine attention_mask with user mask
-        combined_mask = self.attention_mask
-        if mask is not None:
-            combined_mask = self.attention_mask & mask.to(self.attention_mask.device)
-
-        values = ent * combined_mask.float()
-        return self._aggregate(values, combined_mask, agg)
+        combined_mask = self._combined_mask(mask)
+        return self._aggregate(self._entropy_values(combined_mask), combined_mask, agg)
 
     def get_chain_accuracy(
         self,
@@ -353,7 +348,7 @@ class MaskScanOutput:
         if self.token_offsets is None or chain not in self.token_offsets:
             return None
         start, end = self.token_offsets[chain]
-        chain_accuracy = self.accuracy()[start:end]
+        chain_accuracy = self._accuracy_values(self.attention_mask)[start:end]
         chain_attn_mask = self.attention_mask[start:end]
 
         # Combine with user mask if provided
@@ -391,7 +386,7 @@ class MaskScanOutput:
         if self.token_offsets is None or chain not in self.token_offsets:
             return None
         start, end = self.token_offsets[chain]
-        chain_perplexity = self.perplexity()[start:end]
+        chain_perplexity = self._perplexity_values(self.attention_mask)[start:end]
         chain_attn_mask = self.attention_mask[start:end]
 
         # Combine with user mask if provided
@@ -429,7 +424,7 @@ class MaskScanOutput:
         if self.token_offsets is None or chain not in self.token_offsets:
             return None
         start, end = self.token_offsets[chain]
-        chain_entropy = self.entropy()[start:end]
+        chain_entropy = self._entropy_values(self.attention_mask)[start:end]
         chain_attn_mask = self.attention_mask[start:end]
 
         # Combine with user mask if provided

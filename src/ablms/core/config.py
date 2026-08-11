@@ -21,7 +21,8 @@ class ModelConfig:
         model_id: HuggingFace model ID or package model name.
         supports_paired: Whether the model supports paired sequences.
         max_length: Maximum sequence length.
-        embedding_dim: Embedding dimension.
+        embedding_dim: Embedding dimension. None for generative models, which
+            have no fixed-size embedding output.
         mask_token: Model-specific mask token.
         separator: Chain separator token (for paired models).
         has_mlm_head: Whether model has MLM head.
@@ -34,7 +35,7 @@ class ModelConfig:
     model_id: str
     supports_paired: bool = False
     max_length: int = 512
-    embedding_dim: int = 768
+    embedding_dim: int | None = 768
     mask_token: str | None = None
     separator: str | None = None
     has_mlm_head: bool = True

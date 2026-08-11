@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import torch
 import torch.nn.functional as F
 
@@ -69,15 +71,15 @@ class AbLang(EncoderAbLM):
         """
         super().__init__(device=device, devices=devices)
         # Lazy-loaded models
-        self._heavy_model = None
-        self._light_model = None
-        self._ablang_module = None
+        self._heavy_model: Any = None
+        self._light_model: Any = None
+        self._ablang_module: Any = None
         self._load_model()
 
     def _load_model(self) -> None:
         """Verify ablang package is available; models are loaded lazily."""
         try:
-            import ablang
+            import ablang  # ty: ignore[unresolved-import]
 
             self._ablang_module = ablang
         except ImportError as e:
@@ -299,9 +301,9 @@ class AbLang(EncoderAbLM):
                 light_indices.append(i)
 
         # Process each partition
-        results = [None] * len(sequences)
-        masks = [None] * len(sequences)
-        offsets = [None] * len(sequences)
+        results: list[Any] = [None] * len(sequences)
+        masks: list[Any] = [None] * len(sequences)
+        offsets: list[Any] = [None] * len(sequences)
 
         if heavy_indices:
             heavy_seqs = [sequences[i] for i in heavy_indices]
@@ -549,7 +551,7 @@ class AbLang(EncoderAbLM):
                 continue
 
             masked_ids = input_ids.clone()
-            original_token = input_ids[i].item()
+            original_token = int(input_ids[i].item())
             masked_ids[i] = mask_token_id
 
             inputs = {"input_ids": masked_ids.unsqueeze(0)}

@@ -287,7 +287,7 @@ class AbLang2(EncoderAbLM):
                 continue
 
             masked_ids = input_ids.clone()
-            original_token = input_ids[i].item()
+            original_token = int(input_ids[i].item())
             masked_ids[i] = mask_token_id
 
             inputs = {"input_ids": masked_ids.unsqueeze(0)}

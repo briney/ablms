@@ -68,17 +68,18 @@ class GenerationOutput:
         Raises:
             ValueError: If scores are not available.
         """
-        if self.scores is None:
+        scores = self.scores
+        if scores is None:
             raise ValueError("Scores are not available for ranking")
 
         # Sort by score descending
         sorted_indices = sorted(
-            range(len(self.scores)), key=lambda i: self.scores[i], reverse=True
+            range(len(scores)), key=lambda i: scores[i], reverse=True
         )[:k]
 
         return GenerationOutput(
             sequences=[self.sequences[i] for i in sorted_indices],
-            scores=[self.scores[i] for i in sorted_indices],
+            scores=[scores[i] for i in sorted_indices],
             generation_params=self.generation_params,
         )
 
