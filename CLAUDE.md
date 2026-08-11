@@ -27,7 +27,7 @@ pytest -v
 # Linting and formatting
 black src/ tests/
 ruff check src/ tests/
-mypy src/
+ty check src/
 ```
 
 ## Code Style
