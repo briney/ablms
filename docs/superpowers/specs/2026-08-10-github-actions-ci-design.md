@@ -87,11 +87,12 @@ A single new file, `.github/workflows/ci.yml`, triggered on `pull_request` and o
 workflow already shows the pattern of declaring permissions explicitly. Three jobs run in
 parallel:
 
-| Job | Python | Installs | Command |
-| --- | --- | --- | --- |
-| `lint` | 3.12 | `ruff`, `black` only | `ruff check src/ tests/`, `black --check src/ tests/` |
-| `typecheck` | 3.12 | project + `ty` | `ty check src/ --output-format github` |
-| `test` | 3.10, 3.11, 3.12 | project | `pytest -m "not slow"` |
+| Job | Python | Installs | Command | Blocking |
+| --- | --- | --- | --- | --- |
+| `lint` | 3.12 | `ruff`, `black` only | `ruff check src/ tests/`, `black --check src/ tests/` | yes |
+| `typecheck` | 3.12 | project + `ty` | `ty check src/ --output-format github` | yes |
+| `test` | 3.10, 3.11, 3.12 | project | `pytest -m "not slow"` | yes |
+| `smoke` | 3.12 | project | `pytest -m smoke` | **no** (`continue-on-error`) |
 
 `lint` installs no project dependencies and finishes in seconds. `typecheck` must install the
 real dependencies, because ty resolves third-party imports through the environment — without
@@ -101,6 +102,24 @@ them, so total wall clock is roughly one install.
 
 The Python matrix covers 3.10, 3.11, and 3.12, matching the classifiers in `pyproject.toml`
 exactly and exercising the `requires-python = ">=3.10"` floor.
+
+### The `smoke` job and why it exists
+
+The non-slow suite has a blind spot that this design would otherwise institutionalise: every test
+that loads real weights is marked `slow` and deselected, so CI can be entirely green while models
+are broken. That is not hypothetical — it is exactly how the IgLM and AntiBERTy breakage described
+below went unnoticed.
+
+Two backends ship their weights inside the package (`iglm/trained_models/`,
+`antiberty/trained_models/`), so they can be instantiated with **no network and no GPU**. A new
+`smoke` marker covers tests that construct these models and run one tiny inference. This catches
+upstream-incompatibility breakage that the deselected slow tests cannot report.
+
+Because both of those models are broken *today*, the job starts as `continue-on-error: true` with
+a tracking issue, and becomes a required check once the transformers-compatibility work lands.
+Starting it blocking would contradict the clean-from-day-one approach the rest of this design
+follows. The marker is registered in `pyproject.toml` alongside `slow`, and `smoke` tests are also
+marked `slow` so that a bare `pytest -m "not slow"` continues to exclude them.
 
 ### Installation
 
@@ -133,6 +152,11 @@ execute the full suite by default. Deselecting slow tests is a CI policy, not a 
 Dependencies stay unpinned, so CI doubles as an early-warning system for upstream breakage — the
 right trade for a library that wraps `transformers`. The validation above establishes that this
 does not destabilise the type gate.
+
+One honest caveat: floating dependencies only provide early warning for breakage the test suite can
+actually observe. Since the tests that load real weights are all deselected, the `test` job alone
+would not have caught the transformers 5 incompatibility documented below. The `smoke` job is what
+makes the floating-dependency choice pay off; without it, "float to latest" buys very little here.
 
 **Development tooling is the exception and gets exact pins.** The rule is: runtime dependencies
 float, because their breakage is news we want; the tools doing the checking are pinned, because
@@ -204,11 +228,51 @@ The map *values* are wrong as well. `SPECIES_MAP` (`iglm.py:14-22`) and `CHAIN_T
 vocabulary control tokens. IgLM's `vocab.txt` defines exactly: `[CAMEL]`, `[HUMAN]`, `[MOUSE]`,
 `[RABBIT]`, `[RAT]`, `[RHESUS]`, `[HEAVY]`, `[LIGHT]`.
 
-**Every IgLM generate, infill, and scoring call raises `TypeError` today.** There is no
-`tests/test_iglm.py` at all, which is why this went unnoticed.
+The return values are wrong too, which the keyword fix alone would not address:
 
-Both bugs are fixed as part of this work — 15 of the 46 remaining diagnostics are in this one
-file, so a green gate on `src/` requires it regardless.
+- **`generate()` and `infill()` both return `list[str]`**, not a tuple. The wrapper does
+  `generated_seq, score = self._iglm.generate(...)`, which raises `ValueError` on unpacking.
+- **IgLM produces no scores.** The wrapper's `scores` list has no source in the underlying API;
+  it can only come from separate `log_likelihood()` calls. `log_likelihood()` itself returns a
+  bare `float` and is the one method whose return shape the wrapper gets right.
+- **`generate()` deduplicates internally** (`while len(decoded_seqs) < num_to_generate` over a
+  `set`), so the wrapper's loop calling it `num_sequences` times with `num_to_generate=1` is both
+  incorrect and needlessly slow.
+- `generate()` accepts no `top_k` and no `max_length`, both of which the wrapper's `_generate`
+  signature advertises to callers.
+
+**Every IgLM generate, infill, and scoring call fails today.** There is no `tests/test_iglm.py` at
+all, which is why this went unnoticed.
+
+### IgLM and AntiBERTy are non-functional under transformers 5.x
+
+Attempting to verify a fix end-to-end revealed a deeper problem. IgLM ships its weights inside
+the package (`iglm/trained_models/`, 52 MB for `IgLM` and 6.5 MB for `IgLM-S`), so an offline test
+looked feasible. It is not: under transformers 5, `BertTokenizerFast(vocab_file=...)` no longer
+loads the vocabulary, leaving IgLM's tokenizer with 5 tokens total. `[HEAVY]`, `[HUMAN]`, and even
+the amino acid `E` all map to `[UNK]`, so `generate()` fails its own assertion:
+
+```
+AssertionError: Unrecognized token supplied in starting tokens
+```
+
+Confirmed under transformers 5.15.0 (clean venv) and 5.3.0 (the current development environment).
+AntiBERTy fails under transformers 5.15.0 as well, differently:
+`AttributeError: 'AntiBERTy' object has no attribute 'all_tied_weights_keys'`. Both packages
+declare unbounded requirements — `iglm` wants `transformers>=4.6.1`, `antiberty` wants
+`>=4.5.1` — which is how they drifted into breakage unnoticed.
+
+**This is out of scope for the CI work** and needs its own spec: the likely resolution is an upper
+bound such as `transformers>=4.30.0,<5`, which has consequences for every other encoder and must
+be validated against all ten models.
+
+### Consequence for this work: type-level fixes only
+
+Because the wrapper's runtime correctness cannot be verified in any currently installable
+environment, this work fixes `generators/iglm.py` only far enough to be *type*-correct and
+*API*-correct against the installed `iglm` signatures — right keyword names, right token values,
+right return-value handling — without claiming the model runs. The runtime incompatibility is
+filed as a separate issue.
 
 ### Guarding against recurrence
 
@@ -218,11 +282,12 @@ invariants. It asserts two things:
 
 1. The keyword arguments the wrapper passes bind successfully against
    `inspect.signature(IgLM.generate)`, `IgLM.infill`, and `IgLM.log_likelihood`.
-2. Every value in `SPECIES_MAP` and `CHAIN_TYPE_MAP` is a real token in IgLM's vocabulary.
+2. Every value in `SPECIES_MAP` and `CHAIN_TYPE_MAP` appears in IgLM's `vocab.txt`.
 
-Both checks run without model weights, network access, or a GPU, so they belong in the non-slow
-suite and will run on every PR. This catches the same class of upstream API drift that produced
-the bug.
+Both checks read the `iglm` package's signatures and vocabulary file without instantiating the
+model, so they pass regardless of the transformers incompatibility and need no weights, network,
+or GPU. They belong in the non-slow suite and run on every PR, catching exactly the kind of
+upstream API drift that produced the bug.
 
 ## Implementation order
 
@@ -237,7 +302,10 @@ independently verifiable:
 1. **Format and lint.** `black src/ tests/` (18 files), `ruff check --fix src/ tests/` (41 of 57
    errors), then the remaining 16 ruff errors by hand.
 2. **Annotate the model attributes.** `core/base.py:83-84` to `Any`. Verify ty drops 204 → 46.
-3. **Fix the IgLM bug.** Correct keyword names and both token maps; add `tests/test_iglm.py`.
+3. **Fix the IgLM wrapper at the type/API level.** Correct keyword names, both token maps, and the
+   return-value handling for `generate`/`infill`; add `tests/test_iglm.py` with the signature and
+   vocabulary contract tests. Do not attempt runtime verification — see the transformers
+   incompatibility above.
 4. **Fix the remaining 31 ty diagnostics**, i.e. all those outside `iglm.py`, distributed as in
    the table above. Several are real latent defects rather than annotation noise:
    `executor.py` dereferences `self._workers` and `self._result_queue` without narrowing their
@@ -246,9 +314,13 @@ independently verifiable:
    single `# ty: ignore[unresolved-import]` for `ablang.py:81`.
 5. **Update project metadata.** Remove the `[tool.mypy]` block and `mypy>=1.0.0` from
    `pyproject.toml`; replace `ruff>=0.1.0` and `black>=23.0.0` with exact pins and add
-   `ty==0.0.40` to the dev extra; update `CLAUDE.md`, which currently documents `mypy src/` as a
-   development command.
-6. **Add `.github/workflows/ci.yml`.**
+   `ty==0.0.40` to the dev extra; register the `smoke` marker alongside `slow`; update
+   `CLAUDE.md`, which currently documents `mypy src/` as a development command.
+6. **Add the smoke tests.** `tests/test_smoke.py`, marked `@pytest.mark.smoke` and
+   `@pytest.mark.slow`, instantiating the bundled-weight IgLM and AntiBERTy models and running one
+   tiny inference each. These are expected to fail until the transformers work lands, which is why
+   the job is non-blocking.
+7. **Add `.github/workflows/ci.yml`.**
 
 ## Testing strategy
 
@@ -262,6 +334,13 @@ in branch protection. The workflow file cannot be validated locally; a real PR r
 
 ## Known issues left open
 
+Each of these needs a GitHub issue filed as part of this work, so the suppressions and the
+non-blocking smoke job have something to point at.
+
+- **IgLM and AntiBERTy are non-functional under transformers 5.x.** Documented in detail above.
+  This is the most serious finding and deserves its own spec: two of ten models are broken, the
+  likely fix is a `transformers<5` upper bound, and validating that against the other eight models
+  is a project in itself. The `smoke` job is non-blocking until this is resolved.
 - **`ablang` (v1) is an undeclared dependency.** `encoders/ablang.py:81` imports it, but it is
   not in `project.dependencies` and is not installed in the development environment, so ty
   reports `unresolved-import` and the AbLang v1 slow tests cannot run anywhere. Deciding whether
