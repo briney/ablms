@@ -232,7 +232,9 @@ to:
 ty check src/ 2>&1 | tail -1
 ```
 
-Expected: `Found 46 diagnostics` (down from 204).
+Expected: `Found 44 diagnostics` (down from 204).
+
+Note: 44, not 46. Task 2's deletion of the dead `prefix` and `suffix` locals in `generators/iglm.py` removed two `not-subscriptable` diagnostics along with the dead code, so `iglm.py` now carries 13 rather than 15. Task 5's end state of 28 is unaffected.
 
 - [ ] **Step 4: Verify tests still pass**
 
@@ -352,7 +354,7 @@ ty check src/ --output-format concise 2>&1 | grep -c 'error'
 ty check src/ --output-format concise 2>&1 | grep 'replace' || echo "no replace errors remain"
 ```
 
-Expected: count is `43` (46 minus 3). The `esm2.py`, `antiberty.py`, and `ablang.py` `Attribute 'replace' is not defined on 'None'` errors are gone. One `replace` error remains in `generators/iglm.py:218`; Task 5 fixes it.
+Expected: count is `41` (44 minus 3). The `esm2.py`, `antiberty.py`, and `ablang.py` `Attribute 'replace' is not defined on 'None'` errors are gone. One `replace` error remains in `generators/iglm.py:218`; Task 5 fixes it.
 
 - [ ] **Step 7: Run the full non-slow suite**
 
@@ -679,7 +681,7 @@ Expected: `All checks passed!` from ty and ruff, black clean, and all `test_iglm
 ty check src/ 2>&1 | tail -1
 ```
 
-Expected: `Found 28 diagnostics` (43 after Task 4, minus the 15 in `iglm.py`).
+Expected: `Found 28 diagnostics` (41 after Task 4, minus the 13 remaining in `iglm.py`).
 
 - [ ] **Step 12: Commit**
 
@@ -1357,4 +1359,4 @@ If this fails for permissions reasons, configure it through the repository setti
 
 **Type consistency.** `AntibodySequence.primary_chain -> str` is defined in Task 4 Step 3 and consumed in Task 4 Step 5 and Task 5 Steps 6 and 9 under that exact name. `SPECIES_MAP` and `CHAIN_TYPE_MAP` keep their names throughout, changing only their values. The `MaskScanOutput` helpers introduced in Task 6 Step 5 (`_combined_mask`, `_accuracy_values`, `_perplexity_values`, `_entropy_values`) are used under those exact names in Step 6. `_require_workers` and `_require_result_queue` from Task 6 Step 3 are used under those names in the same step. `SpawnContext` and `SpawnProcess` are imported in Task 6 Steps 1 and 2 before use.
 
-**Diagnostic arithmetic.** 204 → 46 (Task 3) → 43 (Task 4, three `replace` sites) → 28 (Task 5, fifteen in `iglm.py`) → 0 (Task 6). The 28 in Task 6 break down as: `executor.py` 5 + `worker.py` 1 + the `SpawnProcess` follow-on, `mask_scan.py` 6, `ablang.py` 8, `ablang2.py` 1, `esm2.py` 1, `ftesm.py` 1, `igt5.py` 1, `base.py` 2, `config.py` 1, `generation.py` 1. Task 6 Step 12 is the checkpoint that catches any drift.
+**Diagnostic arithmetic.** 204 → 44 (Task 3) → 41 (Task 4, three `replace` sites) → 28 (Task 5, thirteen in `iglm.py`) → 0 (Task 6). The plan originally predicted 46/43 at the first two steps; Task 2's dead-code deletion removed two `iglm.py` diagnostics for free, shifting both by two without changing Task 5's end state. The 28 in Task 6 break down as: `executor.py` 5 + `worker.py` 1 + the `SpawnProcess` follow-on, `mask_scan.py` 6, `ablang.py` 8, `ablang2.py` 1, `esm2.py` 1, `ftesm.py` 1, `igt5.py` 1, `base.py` 2, `config.py` 1, `generation.py` 1. Task 6 Step 12 is the checkpoint that catches any drift.
