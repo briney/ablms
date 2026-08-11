@@ -79,6 +79,8 @@ class AbLang(EncoderAbLM):
     def _load_model(self) -> None:
         """Verify ablang package is available; models are loaded lazily."""
         try:
+            # AbLang v1 is not a declared dependency (not installed in the dev
+            # environment), so ty cannot resolve this import. See issue #6.
             import ablang  # ty: ignore[unresolved-import]
 
             self._ablang_module = ablang
