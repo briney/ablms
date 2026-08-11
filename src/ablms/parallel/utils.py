@@ -8,7 +8,6 @@ import torch
 
 from ablms.exceptions import DeviceError
 
-
 # Environment variable defaults
 DEFAULT_BATCH_SIZE = int(os.environ.get("ABLMS_DEFAULT_BATCH_SIZE", 32))
 DISABLE_MULTI_GPU = os.environ.get("ABLMS_DISABLE_MULTI_GPU", "").lower() == "true"

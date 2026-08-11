@@ -106,7 +106,6 @@ def last_pooling(
     # Find the last valid position for each sequence
     # Sum along seq_len to get lengths, subtract 1 for index
     lengths = attention_mask.sum(dim=1).long() - 1
-    batch_size = embeddings.size(0)
 
     # Gather the last valid embedding for each sequence
     indices = lengths.unsqueeze(-1).expand(-1, embeddings.size(-1))

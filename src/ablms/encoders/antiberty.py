@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 import torch
 import torch.nn.functional as F
 
@@ -70,9 +69,7 @@ class AntiBERTy(EncoderAbLM):
         self._model = self._runner.model
         self._tokenizer = self._runner.tokenizer
 
-    def _format_for_model(
-        self, sequences: list[AntibodySequence]
-    ) -> list[str]:
+    def _format_for_model(self, sequences: list[AntibodySequence]) -> list[str]:
         """
         Format sequences for AntiBERTy.
 
@@ -89,9 +86,7 @@ class AntiBERTy(EncoderAbLM):
 
         return formatted
 
-    def _tokenize(
-        self, formatted_sequences: list[str]
-    ) -> dict[str, torch.Tensor]:
+    def _tokenize(self, formatted_sequences: list[str]) -> dict[str, torch.Tensor]:
         """Tokenize formatted sequences using AntiBERTy tokenizer."""
         encoded = self._tokenizer(
             formatted_sequences,
@@ -208,12 +203,18 @@ class AntiBERTy(EncoderAbLM):
 
             inputs = {
                 "input_ids": torch.tensor([masked_tokens], device=self._primary_device),
-                "attention_mask": torch.ones(1, len(masked_tokens), device=self._primary_device),
+                "attention_mask": torch.ones(
+                    1, len(masked_tokens), device=self._primary_device
+                ),
             }
 
             with torch.no_grad():
                 outputs = self._model(**inputs)
-                logits = outputs.logits[0, i] if hasattr(outputs, "logits") else outputs[0][0, i]
+                logits = (
+                    outputs.logits[0, i]
+                    if hasattr(outputs, "logits")
+                    else outputs[0][0, i]
+                )
                 log_probs = F.log_softmax(logits, dim=-1)
                 total_ll += log_probs[original_token].item()
 
@@ -234,7 +235,9 @@ class AntiBERTy(EncoderAbLM):
 
             with torch.no_grad():
                 outputs = self._model(**tokenized)
-                logits = outputs.logits[0] if hasattr(outputs, "logits") else outputs[0][0]
+                logits = (
+                    outputs.logits[0] if hasattr(outputs, "logits") else outputs[0][0]
+                )
 
             input_ids = tokenized["input_ids"][0]
             mask_positions = (input_ids == mask_token_id).nonzero(as_tuple=True)[0]
@@ -249,7 +252,6 @@ class AntiBERTy(EncoderAbLM):
                 _, top_k_indices = torch.topk(logits[pos], top_k)
 
                 for idx in top_k_indices:
-                    token = self._tokenizer.decode([idx.item()]).strip()
                     filled_ids = input_ids.clone()
                     filled_ids[pos] = idx
                     filled_seq = self._decode_to_sequence(seq, filled_ids)
@@ -307,14 +309,18 @@ class AntiBERTy(EncoderAbLM):
             seq_len = len(tokens)
             vocab_size = self._model.config.vocab_size
             logits = torch.zeros(seq_len, vocab_size, device=self._primary_device)
-            valid_mask = torch.zeros(seq_len, dtype=torch.bool, device=self._primary_device)
+            valid_mask = torch.zeros(
+                seq_len, dtype=torch.bool, device=self._primary_device
+            )
 
             # Build list of positions to mask (skip [CLS] and [SEP])
             positions_to_mask = list(range(1, seq_len - 1))
 
             # Process masked variants in batches
             for batch_start in range(0, len(positions_to_mask), batch_size):
-                batch_positions = positions_to_mask[batch_start:batch_start + batch_size]
+                batch_positions = positions_to_mask[
+                    batch_start : batch_start + batch_size
+                ]
                 current_batch_size = len(batch_positions)
 
                 # Create masked variants for this batch
@@ -332,8 +338,12 @@ class AntiBERTy(EncoderAbLM):
 
                 # Single batched forward pass
                 with torch.no_grad():
-                    outputs = self._model(input_ids=input_ids, attention_mask=attention_mask)
-                    output_logits = outputs.logits if hasattr(outputs, "logits") else outputs[0]
+                    outputs = self._model(
+                        input_ids=input_ids, attention_mask=attention_mask
+                    )
+                    output_logits = (
+                        outputs.logits if hasattr(outputs, "logits") else outputs[0]
+                    )
 
                 # Extract logits for each masked position
                 for batch_idx, pos in enumerate(batch_positions):
@@ -341,7 +351,9 @@ class AntiBERTy(EncoderAbLM):
                     valid_mask[pos] = True
 
             # Compute token offsets for this single sequence
-            tokenized = {"input_ids": torch.tensor([tokens], device=self._primary_device)}
+            tokenized = {
+                "input_ids": torch.tensor([tokens], device=self._primary_device)
+            }
             offsets = self._compute_token_offsets([seq], tokenized)[0]
 
             results.append(

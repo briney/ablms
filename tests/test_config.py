@@ -4,9 +4,8 @@ import pytest
 
 from ablms.core.config import (
     ModelConfig,
-    MODEL_REGISTRY,
-    list_models,
     get_model_config,
+    list_models,
 )
 from ablms.exceptions import ModelNotFoundError
 

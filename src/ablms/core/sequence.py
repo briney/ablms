@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from enum import Enum
 
 from ablms.exceptions import InvalidAminoAcidError, InvalidSequenceError
@@ -192,9 +191,7 @@ class AntibodySequence:
         """Get total length across all chains."""
         return sum(self.length.values())
 
-    def with_mask(
-        self, chain: str, positions: list[int]
-    ) -> AntibodySequence:
+    def with_mask(self, chain: str, positions: list[int]) -> AntibodySequence:
         """
         Create a new AntibodySequence with mask tokens at specified positions.
 

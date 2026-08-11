@@ -4,18 +4,17 @@ from __future__ import annotations
 
 import warnings
 from abc import ABC, abstractmethod
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import torch
 
-from ablms.core.sequence import AntibodySequence, Species
+from ablms.core.sequence import AntibodySequence
 from ablms.exceptions import (
-    DeviceError,
     PairedSequenceError,
     SequenceTooLongError,
     ValidationError,
 )
-from ablms.parallel.utils import resolve_devices, resolve_single_device, get_device_info
+from ablms.parallel.utils import get_device_info, resolve_devices, resolve_single_device
 
 if TYPE_CHECKING:
     from ablms.parallel.executor import MultiGPUExecutor
@@ -50,7 +49,9 @@ class BaseAbLM(ABC):
     def __init__(
         self,
         device: str | torch.device | None = None,
-        devices: str | int | list[int | str] | torch.device | list[torch.device] | None = None,
+        devices: (
+            str | int | list[int | str] | torch.device | list[torch.device] | None
+        ) = None,
     ) -> None:
         """
         Initialize the base model.
@@ -202,9 +203,7 @@ class BaseAbLM(ABC):
             "AntibodySequence, List[str], or List[AntibodySequence]."
         )
 
-    def _validate_input(
-        self, sequences: list[AntibodySequence]
-    ) -> None:
+    def _validate_input(self, sequences: list[AntibodySequence]) -> None:
         """
         Validate input sequences for this model.
 
@@ -237,9 +236,7 @@ class BaseAbLM(ABC):
                 )
 
     @abstractmethod
-    def _format_for_model(
-        self, sequences: list[AntibodySequence]
-    ) -> list[str]:
+    def _format_for_model(self, sequences: list[AntibodySequence]) -> list[str]:
         """
         Format sequences for model-specific tokenization.
 
@@ -255,9 +252,7 @@ class BaseAbLM(ABC):
         pass
 
     @abstractmethod
-    def _tokenize(
-        self, formatted_sequences: list[str]
-    ) -> dict[str, torch.Tensor]:
+    def _tokenize(self, formatted_sequences: list[str]) -> dict[str, torch.Tensor]:
         """
         Tokenize formatted sequences.
 

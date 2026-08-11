@@ -3,8 +3,8 @@
 import pytest
 import torch
 
-from ablms import AntibodySequence, load_model, list_models
-from ablms.core.config import get_model_config, MODEL_REGISTRY
+from ablms import AntibodySequence, list_models, load_model
+from ablms.core.config import MODEL_REGISTRY, get_model_config
 from ablms.encoders.ablang import AbLang
 from ablms.exceptions import PairedSequenceError
 

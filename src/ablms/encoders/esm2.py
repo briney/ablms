@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 import torch
 import torch.nn.functional as F
 from transformers import AutoTokenizer, EsmForMaskedLM
@@ -10,7 +9,6 @@ from transformers import AutoTokenizer, EsmForMaskedLM
 from ablms.core.encoder import EncoderAbLM
 from ablms.core.sequence import AntibodySequence
 from ablms.outputs import MaskScanOutput
-
 
 # ESM-2 model configurations
 ESM2_CONFIGS = {
@@ -95,9 +93,7 @@ class ESM2(EncoderAbLM):
         self._model = self._model.to(self._primary_device)
         self._model.eval()
 
-    def _format_for_model(
-        self, sequences: list[AntibodySequence]
-    ) -> list[str]:
+    def _format_for_model(self, sequences: list[AntibodySequence]) -> list[str]:
         """
         Format sequences for ESM-2 tokenization.
 
@@ -110,17 +106,13 @@ class ESM2(EncoderAbLM):
             sequence = seq.heavy_chain or seq.light_chain
 
             # Convert unified mask token to ESM-2 mask token
-            sequence = sequence.replace(
-                AntibodySequence.MASK_TOKEN, self.mask_token
-            )
+            sequence = sequence.replace(AntibodySequence.MASK_TOKEN, self.mask_token)
 
             formatted.append(sequence)
 
         return formatted
 
-    def _tokenize(
-        self, formatted_sequences: list[str]
-    ) -> dict[str, torch.Tensor]:
+    def _tokenize(self, formatted_sequences: list[str]) -> dict[str, torch.Tensor]:
         """Tokenize formatted sequences."""
         encoded = self._tokenizer(
             formatted_sequences,
@@ -245,7 +237,9 @@ class ESM2(EncoderAbLM):
 
             inputs = {
                 "input_ids": torch.tensor([masked_tokens], device=self._primary_device),
-                "attention_mask": torch.ones(1, len(masked_tokens), device=self._primary_device),
+                "attention_mask": torch.ones(
+                    1, len(masked_tokens), device=self._primary_device
+                ),
             }
 
             with torch.no_grad():
@@ -345,7 +339,9 @@ class ESM2(EncoderAbLM):
             seq_len = len(tokens)
             vocab_size = self._model.config.vocab_size
             logits = torch.zeros(seq_len, vocab_size, device=self._primary_device)
-            valid_mask = torch.zeros(seq_len, dtype=torch.bool, device=self._primary_device)
+            valid_mask = torch.zeros(
+                seq_len, dtype=torch.bool, device=self._primary_device
+            )
 
             # Build list of positions to mask (skip [CLS] and [EOS])
             positions_to_mask = []
@@ -356,7 +352,9 @@ class ESM2(EncoderAbLM):
 
             # Process masked variants in batches
             for batch_start in range(0, len(positions_to_mask), batch_size):
-                batch_positions = positions_to_mask[batch_start:batch_start + batch_size]
+                batch_positions = positions_to_mask[
+                    batch_start : batch_start + batch_size
+                ]
                 current_batch_size = len(batch_positions)
 
                 # Create masked variants for this batch
@@ -374,7 +372,9 @@ class ESM2(EncoderAbLM):
 
                 # Single batched forward pass
                 with torch.no_grad():
-                    outputs = self._model(input_ids=input_ids, attention_mask=attention_mask)
+                    outputs = self._model(
+                        input_ids=input_ids, attention_mask=attention_mask
+                    )
 
                 # Extract logits for each masked position
                 for batch_idx, pos in enumerate(batch_positions):
@@ -382,7 +382,9 @@ class ESM2(EncoderAbLM):
                     valid_mask[pos] = True
 
             # Compute token offsets for this single sequence
-            tokenized = {"input_ids": torch.tensor([tokens], device=self._primary_device)}
+            tokenized = {
+                "input_ids": torch.tensor([tokens], device=self._primary_device)
+            }
             offsets = self._compute_token_offsets([seq], tokenized)[0]
 
             results.append(

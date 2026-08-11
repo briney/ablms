@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from abc import abstractmethod
 
-import torch
-
 from ablms.core.base import BaseAbLM
 from ablms.core.sequence import AntibodySequence, ChainType, Species
 from ablms.outputs import GenerationOutput

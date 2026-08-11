@@ -140,7 +140,9 @@ class MaskScanOutput:
             )
 
         # Initialize full mask as all True
-        full_mask = torch.ones(self.seq_len, dtype=torch.bool, device=self.logits.device)
+        full_mask = torch.ones(
+            self.seq_len, dtype=torch.bool, device=self.logits.device
+        )
 
         # Apply heavy chain mask if provided
         if heavy is not None:
@@ -441,9 +443,7 @@ class MaskScanOutput:
 
         return self._aggregate(chain_entropy, chain_attn_mask, agg)
 
-    def top_k_predictions(
-        self, k: int = 5
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    def top_k_predictions(self, k: int = 5) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Get top-k predictions for each position.
 

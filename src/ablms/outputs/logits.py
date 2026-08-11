@@ -99,9 +99,7 @@ class LogitsOutput:
 
         return result
 
-    def top_k_predictions(
-        self, k: int = 5
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    def top_k_predictions(self, k: int = 5) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Get top-k predictions for each position.
 
@@ -113,9 +111,7 @@ class LogitsOutput:
         """
         return torch.topk(self.logits, k=k, dim=-1)
 
-    def get_chain_logits(
-        self, idx: int, chain: str
-    ) -> torch.Tensor | None:
+    def get_chain_logits(self, idx: int, chain: str) -> torch.Tensor | None:
         """
         Extract logits for a specific chain from a batch element.
 

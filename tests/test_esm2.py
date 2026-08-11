@@ -3,8 +3,8 @@
 import pytest
 import torch
 
-from ablms import AntibodySequence, load_model, list_models, PairedSequenceError
-from ablms.core.config import get_model_config, MODEL_REGISTRY
+from ablms import AntibodySequence, PairedSequenceError, list_models, load_model
+from ablms.core.config import MODEL_REGISTRY, get_model_config
 from ablms.encoders.esm2 import ESM2, ESM2_CONFIGS
 
 
@@ -417,7 +417,14 @@ class TestESM2Registration:
         assert "esm2-650m" in models
         assert "esm2-3b" in models
         assert "esm2-15b" in models
-        for name in ["esm2-8m", "esm2-35m", "esm2-150m", "esm2-650m", "esm2-3b", "esm2-15b"]:
+        for name in [
+            "esm2-8m",
+            "esm2-35m",
+            "esm2-150m",
+            "esm2-650m",
+            "esm2-3b",
+            "esm2-15b",
+        ]:
             assert models[name] == "encoder"
 
     @pytest.mark.slow

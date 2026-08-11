@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-
 import torch
 import torch.nn.functional as F
-from transformers import AutoModel, AutoTokenizer, AutoModelForMaskedLM
+from transformers import AutoModelForMaskedLM, AutoTokenizer
 
 from ablms.core.encoder import EncoderAbLM
 from ablms.core.sequence import AntibodySequence
@@ -80,9 +79,7 @@ class AntiBERTa2(EncoderAbLM):
             return getattr(self._model, self._base_model_attr)
         return self._model
 
-    def _format_for_model(
-        self, sequences: list[AntibodySequence]
-    ) -> list[str]:
+    def _format_for_model(self, sequences: list[AntibodySequence]) -> list[str]:
         """
         Format sequences for AntiBERTa2 tokenization.
 
@@ -126,9 +123,7 @@ class AntiBERTa2(EncoderAbLM):
                 i += 1
         return " ".join(result)
 
-    def _tokenize(
-        self, formatted_sequences: list[str]
-    ) -> dict[str, torch.Tensor]:
+    def _tokenize(self, formatted_sequences: list[str]) -> dict[str, torch.Tensor]:
         """Tokenize formatted sequences."""
         encoded = self._tokenizer(
             formatted_sequences,
@@ -149,7 +144,6 @@ class AntiBERTa2(EncoderAbLM):
         input_ids = tokenized["input_ids"]
 
         sep_token_id = self._tokenizer.sep_token_id
-        cls_token_id = self._tokenizer.cls_token_id
 
         for idx, seq in enumerate(sequences):
             seq_offsets = {}
@@ -175,7 +169,10 @@ class AntiBERTa2(EncoderAbLM):
                         if len(sep_positions) > 1
                         else light_start + light_len
                     )
-                    seq_offsets["light"] = (light_start, min(light_end, light_start + light_len))
+                    seq_offsets["light"] = (
+                        light_start,
+                        min(light_end, light_start + light_len),
+                    )
 
             elif seq.light_chain is not None:
                 light_len = seq.length.get("light", 0)
@@ -275,7 +272,9 @@ class AntiBERTa2(EncoderAbLM):
 
             inputs = {
                 "input_ids": torch.tensor([masked_tokens], device=self._primary_device),
-                "attention_mask": torch.ones(1, len(masked_tokens), device=self._primary_device),
+                "attention_mask": torch.ones(
+                    1, len(masked_tokens), device=self._primary_device
+                ),
             }
 
             with torch.no_grad():
@@ -386,7 +385,9 @@ class AntiBERTa2(EncoderAbLM):
             seq_len = len(tokens)
             vocab_size = self._model.config.vocab_size
             logits = torch.zeros(seq_len, vocab_size, device=self._primary_device)
-            valid_mask = torch.zeros(seq_len, dtype=torch.bool, device=self._primary_device)
+            valid_mask = torch.zeros(
+                seq_len, dtype=torch.bool, device=self._primary_device
+            )
 
             # Build list of positions to mask (skip special tokens)
             positions_to_mask = []
@@ -396,7 +397,9 @@ class AntiBERTa2(EncoderAbLM):
 
             # Process masked variants in batches
             for batch_start in range(0, len(positions_to_mask), batch_size):
-                batch_positions = positions_to_mask[batch_start:batch_start + batch_size]
+                batch_positions = positions_to_mask[
+                    batch_start : batch_start + batch_size
+                ]
                 current_batch_size = len(batch_positions)
 
                 # Create masked variants for this batch
@@ -414,7 +417,9 @@ class AntiBERTa2(EncoderAbLM):
 
                 # Single batched forward pass
                 with torch.no_grad():
-                    outputs = self._model(input_ids=input_ids, attention_mask=attention_mask)
+                    outputs = self._model(
+                        input_ids=input_ids, attention_mask=attention_mask
+                    )
 
                 # Extract logits for each masked position
                 for batch_idx, pos in enumerate(batch_positions):
@@ -422,7 +427,9 @@ class AntiBERTa2(EncoderAbLM):
                     valid_mask[pos] = True
 
             # Compute token offsets for this single sequence
-            tokenized = {"input_ids": torch.tensor([tokens], device=self._primary_device)}
+            tokenized = {
+                "input_ids": torch.tensor([tokens], device=self._primary_device)
+            }
             offsets = self._compute_token_offsets([seq], tokenized)[0]
 
             results.append(

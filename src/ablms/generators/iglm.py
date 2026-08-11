@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-
 import torch
 
 from ablms.core.generative import GenerativeAbLM
 from ablms.core.sequence import AntibodySequence, ChainType, Species
 from ablms.exceptions import ModelLoadError
-
 
 # Mapping from our Species enum to IgLM species names
 SPECIES_MAP = {
@@ -74,8 +72,7 @@ class IgLM(GenerativeAbLM):
             from iglm import IgLM as IgLMModel
         except ImportError as e:
             raise ModelLoadError(
-                "Failed to import iglm package. "
-                "Install it with: pip install iglm"
+                "Failed to import iglm package. " "Install it with: pip install iglm"
             ) from e
 
         self._iglm = IgLMModel()
@@ -84,9 +81,7 @@ class IgLM(GenerativeAbLM):
             self._iglm.model = self._iglm.model.to(self._primary_device)
         self._model = self._iglm
 
-    def _format_for_model(
-        self, sequences: list[AntibodySequence]
-    ) -> list[str]:
+    def _format_for_model(self, sequences: list[AntibodySequence]) -> list[str]:
         """Format sequences for IgLM (returns raw sequences)."""
         formatted = []
         for seq in sequences:
@@ -94,9 +89,7 @@ class IgLM(GenerativeAbLM):
             formatted.append(sequence)
         return formatted
 
-    def _tokenize(
-        self, formatted_sequences: list[str]
-    ) -> dict[str, torch.Tensor]:
+    def _tokenize(self, formatted_sequences: list[str]) -> dict[str, torch.Tensor]:
         """Tokenize is handled internally by IgLM."""
         return {"sequences": formatted_sequences}
 
@@ -173,8 +166,6 @@ class IgLM(GenerativeAbLM):
         if mask_range is not None:
             # Use IgLM's infill functionality
             start, end = mask_range
-            prefix = seq_str[:start]
-            suffix = seq_str[end:]
 
             for _ in range(num_sequences):
                 infilled_seq, score = self._iglm.infill(

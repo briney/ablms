@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from ablms.core.sequence import AntibodySequence, ChainType, Species
+    from ablms.core.sequence import AntibodySequence
 
 
 @dataclass

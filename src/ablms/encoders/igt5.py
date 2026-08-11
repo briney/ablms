@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 import torch
 from transformers import T5EncoderModel, T5Tokenizer
 
@@ -69,9 +68,7 @@ class IgT5(EncoderAbLM):
         self._model = self._model.to(self._primary_device)
         self._model.eval()
 
-    def _format_for_model(
-        self, sequences: list[AntibodySequence]
-    ) -> list[str]:
+    def _format_for_model(self, sequences: list[AntibodySequence]) -> list[str]:
         """
         Format sequences for IgT5 tokenization.
 
@@ -98,9 +95,7 @@ class IgT5(EncoderAbLM):
 
         return formatted
 
-    def _tokenize(
-        self, formatted_sequences: list[str]
-    ) -> dict[str, torch.Tensor]:
+    def _tokenize(self, formatted_sequences: list[str]) -> dict[str, torch.Tensor]:
         """Tokenize formatted sequences."""
         encoded = self._tokenizer(
             formatted_sequences,
