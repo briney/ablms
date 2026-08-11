@@ -24,6 +24,14 @@ pytest tests/test_config.py::TestModelRegistry::test_models_registered
 # Run tests with verbose output
 pytest -v
 
+# Reproduce CI's blocking test job (excludes tests that load real model weights)
+python -m pytest -m "not slow"
+
+# Reproduce CI's non-blocking smoke job (bundled-weight models, offline).
+# Currently expected to fail: IgLM and AntiBERTy are broken under
+# transformers 5.x (tracking issue #5).
+python -m pytest -m smoke
+
 # Linting and formatting
 black src/ tests/
 ruff check src/ tests/

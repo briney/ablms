@@ -48,6 +48,9 @@ dev = [
     # Tooling is pinned exactly: ty and ruff are pre-1.0 and change diagnostics
     # between releases, so an unpinned bump would break CI on someone else's
     # release schedule rather than on a change here.
+    # The lint job in .github/workflows/ci.yml installs ruff/black directly
+    # (skipping this extra) with its own hard-coded versions -- keep the two
+    # pins in step, or the lint job silently checks with a stale tool.
     "black==26.5.1",
     "ruff==0.16.2",
     "ty==0.0.40",

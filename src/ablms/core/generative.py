@@ -42,9 +42,14 @@ class GenerativeAbLM(BaseAbLM):
             species: Species for the generated sequence.
             prompt: Optional prompt to condition generation.
             temperature: Sampling temperature (higher = more diverse).
-            top_k: If set, sample from top-k tokens only.
+            top_k: If set, sample from top-k tokens only. Not supported by
+                IgLM, currently the only concrete generative model: it
+                raises `UnsupportedOperationError` if this is set.
             top_p: If set, sample using nucleus sampling.
-            max_length: Maximum sequence length to generate.
+            max_length: Maximum sequence length to generate. Not supported
+                by IgLM, currently the only concrete generative model: it
+                raises `UnsupportedOperationError` if this is set, and
+                upstream hardcodes its own generation length regardless.
             **kwargs: Additional model-specific parameters.
 
         Returns:

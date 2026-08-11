@@ -24,6 +24,9 @@ jobs:
         with:
           python-version: "3.12"
       # No project dependencies needed, so skip the editable install entirely.
+      # These versions are hand-copied from pyproject.toml's [project.optional-
+      # dependencies].dev extra -- keep the two pins in step, or a pin bump in
+      # one will not propagate to the other.
       - run: pip install ruff==0.16.2 black==26.5.1
       - run: ruff check src/ tests/
       - run: black --check src/ tests/
@@ -64,8 +67,12 @@ jobs:
     name: smoke (bundled weights, non-blocking)
     runs-on: ubuntu-latest
     # IgLM and AntiBERTy are broken under transformers 5.x. This job reports
-    # that breakage without blocking merges; make it required once the
-    # transformers-compatibility work lands.
+    # that breakage without blocking merges. With continue-on-error: true,
+    # this job reports success to branch protection even when its tests
+    # fail, so marking it "required" alone would not make it blocking.
+    # Once the transformers-compatibility work lands, make it blocking by
+    # removing continue-on-error below (only then does marking it required
+    # in branch protection have any effect).
     continue-on-error: true
     steps:
       - uses: actions/checkout@v4

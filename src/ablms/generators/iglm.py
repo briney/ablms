@@ -42,7 +42,13 @@ class IgLM(GenerativeAbLM):
     Attributes:
         model_name: "iglm"
         supports_paired: False
-        max_length: 512
+        max_length: 512. This bounds *input* sequence length (checked by
+            `BaseAbLM._validate_sequences` before `infill()`/`log_likelihood()`
+            calls); it does not bound generation length. `generate()` and
+            `infill()` both reject an explicit `max_length` argument with
+            `UnsupportedOperationError`, and the upstream `iglm` package
+            hardcodes `max_length=150` (in token count, including control
+            tokens) for every call regardless of what is passed here.
     """
 
     model_name = "iglm"
@@ -102,7 +108,26 @@ class IgLM(GenerativeAbLM):
         max_length: int | None,
         **kwargs,
     ) -> tuple[list[AntibodySequence], list[float]]:
-        """Generate new antibody sequences using IgLM."""
+        """Generate new antibody sequences using IgLM.
+
+        Two consequences of asking IgLM for all `num_sequences` sequences in
+        a single call:
+
+        - Results are **unique**: upstream de-duplicates generated sequences
+          through a `set` before returning, so the same sequence is never
+          returned twice within one call.
+        - `num_sequences` is a **target, not a cap**: upstream's generation
+          loop is `while len(decoded_seqs) < num_to_generate`, with no
+          attempt limit. It always returns exactly `num_sequences` distinct
+          sequences (never fewer), but if few distinct valid sequences are
+          reachable under the given sampling settings, the call can spin for
+          a long time before satisfying the target.
+
+        Each returned score comes from a separate call to `log_likelihood`
+        (one additional forward pass per generated sequence, on top of the
+        forward passes already spent generating it) -- see `_compute_log_likelihood`
+        for what that score actually measures.
+        """
         # Map enums to IgLM parameters
         iglm_chain = CHAIN_TYPE_MAP.get(chain_type, "[HEAVY]")
         iglm_species = SPECIES_MAP.get(species, "[HUMAN]")
@@ -117,7 +142,8 @@ class IgLM(GenerativeAbLM):
             )
 
         # IgLM returns a de-duplicated list of sequences and no scores, so ask
-        # for all of them in one call and score them separately.
+        # for all of them in one call and score them separately (one extra
+        # forward pass per sequence via log_likelihood() below).
         generated_seqs = self._iglm.generate(
             chain_token=iglm_chain,
             species_token=iglm_species,
@@ -156,7 +182,13 @@ class IgLM(GenerativeAbLM):
         temperature: float,
         **kwargs,
     ) -> tuple[list[AntibodySequence], list[float]]:
-        """Infill masked regions in a sequence."""
+        """Infill masked regions in a sequence.
+
+        As in `_generate`, each returned score costs one extra forward pass
+        via `log_likelihood` (see `_compute_log_likelihood` for what the
+        score itself measures) on top of the forward passes already spent
+        infilling.
+        """
         # Get the sequence string
         seq_str = sequence.primary_chain
 
@@ -248,7 +280,17 @@ class IgLM(GenerativeAbLM):
         chain_type: ChainType,
         species: Species,
     ) -> float:
-        """Compute log-likelihood for a single sequence."""
+        """Compute a log-likelihood score for a single sequence.
+
+        Despite the name (ours and upstream's), this is not a whole-sequence
+        log-likelihood: upstream computes it as
+        `-cross_entropy(..., reduction="mean")`, i.e. the **mean per-token
+        log-probability**, not the summed log-probability over all tokens.
+        That makes it appropriate for comparing sequences of different
+        lengths (which a length-dependent sum would not be), but callers
+        expecting a sequence-level log-likelihood (proportional to sequence
+        length) should be aware it is normalized instead.
+        """
         seq_str = sequence.primary_chain
 
         iglm_chain = CHAIN_TYPE_MAP.get(chain_type, "[HEAVY]")
