@@ -54,10 +54,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/bryanbriney/ablms"
-Documentation = "https://github.com/bryanbriney/ablms#readme"
-Repository = "https://github.com/bryanbriney/ablms"
-Issues = "https://github.com/bryanbriney/ablms/issues"
+Homepage = "https://github.com/briney/ablms"
+Documentation = "https://github.com/briney/ablms#readme"
+Repository = "https://github.com/briney/ablms"
+Issues = "https://github.com/briney/ablms/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ablms"]

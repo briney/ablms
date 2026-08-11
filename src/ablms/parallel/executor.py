@@ -202,7 +202,7 @@ class MultiGPUExecutor:
         """The result queue, which exists only after initialization."""
         if self._result_queue is None:
             raise RuntimeError(
-                "Result queue has not been initialized; call _ensure_initialized() first."
+                "Result queue not initialized; call _ensure_initialized() first."
             )
         return self._result_queue
 
