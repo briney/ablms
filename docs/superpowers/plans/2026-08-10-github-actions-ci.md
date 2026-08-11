@@ -553,13 +553,15 @@ Expected: all tests pass.
         return {"sequences": formatted_sequences}
 ```
 
-Check whether the `dict[str, list[str]]` return type conflicts with the abstract signature in `GenerativeAbLM`:
+Check where the abstract `_tokenize` is declared and whether `dict[str, list[str]]` conflicts with it:
 
 ```bash
-grep -n "_tokenize" -A 4 src/ablms/core/generative.py
+grep -rn "_tokenize" src/ablms/core/
 ```
 
-If the base class declares `dict[str, torch.Tensor]`, widen the base to `dict[str, Any]` and note in its docstring that generative models may return non-tensor payloads. Do not silence the mismatch with a cast.
+**Correction to an earlier draft of this plan:** the abstract declaration is in `src/ablms/core/base.py`, *not* `src/ablms/core/generative.py`. That matters, because `BaseAbLM` is the root of both hierarchies: `EncoderAbLM` does not redeclare `_tokenize`, so widening the root's return type to `dict[str, Any]` also weakens the inferred type at the four `self._tokenize(...)` call sites in `core/encoder.py`, across all ten encoder classes, which genuinely do return tensor dicts.
+
+So do **not** widen `BaseAbLM`. Instead, redeclare `_tokenize` as abstract in `GenerativeAbLM` with the widened `dict[str, Any]` return type and a docstring noting that generative models may return non-tensor payloads. `BaseAbLM` keeps `dict[str, torch.Tensor]`, `EncoderAbLM` keeps inheriting the strict version, and only the generative subtree relaxes. Do not silence the mismatch with a cast.
 
 - [ ] **Step 7: Fix the `generate` call and its return handling**
 
