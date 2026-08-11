@@ -81,8 +81,12 @@ class BaseAbLM(ABC):
         self._primary_device = self._devices[0]
         self._is_multi_gpu = len(self._devices) > 1
         self._executor: MultiGPUExecutor | None = None
-        self._model = None
-        self._tokenizer = None
+        # Deliberately `Any`: concrete model and tokenizer types come from
+        # HuggingFace and are dynamically shaped. Subclasses reach for
+        # attributes like `_model.bert` and `_tokenizer.sep_token_id` that no
+        # static `PreTrainedModel` type declares.
+        self._model: Any = None
+        self._tokenizer: Any = None
 
     @property
     def device(self) -> torch.device:
