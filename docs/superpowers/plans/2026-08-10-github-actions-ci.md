@@ -21,6 +21,8 @@
 - **Never disable a ty or ruff rule globally to make an error go away.** Two exceptions are authorised by the spec and named explicitly in Tasks 2 and 4: the `N812` ruff ignore, and one `# ty: ignore[unresolved-import]` in `encoders/ablang.py`.
 - **Do not attempt to make IgLM or AntiBERTy actually run.** They are broken under transformers 5.x. Task 5 fixes types and API shape only.
 - **Verification baseline:** at the end of Task 7, `ruff check src/ tests/`, `black --check src/ tests/`, `ty check src/`, and `python -m pytest -m "not slow"` must all pass.
+- **`tests/test_smoke.py` is expected to FAIL when committed, by design.** IgLM and AntiBERTy are broken under transformers 5.x; these tests exist to report when that is fixed, and the CI job running them is `continue-on-error: true`. Committing them red is intentional, not an oversight — do not delete, skip, or `xfail` them to make the suite green. They are excluded from the blocking `test` job because `smoke` implies `slow`.
+- **Three `Any` annotations and one `# ty: ignore` are deliberate**, each with a comment stating why: HuggingFace model/tokenizer objects are dynamically shaped, and `ablang` v1 is genuinely not a declared dependency. These are the spec's authorised escapes, not shortcuts.
 
 ## Baseline numbers (measured 2026-08-10)
 
@@ -141,9 +143,9 @@ src/ablms/utils/pooling.py:109:5: F841 Local variable `batch_size` is assigned t
 
 Read each site. These are dead assignments, but confirm that the value is genuinely unused rather than that a nearby line should have been using it — an unused `cls_token_id` next to code that handles `sep_token_id` may be a symptom of a real omission. If any site looks like a latent bug rather than dead code, stop and report it instead of deleting the line.
 
-- [ ] **Step 5: Delete the five dead assignments outside iglm.py**
+- [ ] **Step 5: Delete all six dead assignments**
 
-Delete the assignment line at each of `antiberta2.py:152`, `antiberty.py:252`, `igbert.py:122`, and `pooling.py:109`. Leave `iglm.py:176-177` alone — Task 5 rewrites that block and removes them there.
+Delete the assignment line at each of `antiberta2.py:152`, `antiberty.py:252`, `igbert.py:122`, `pooling.py:109`, and both `iglm.py:176-177` (`prefix` and `suffix`). Task 5 rewrites that `iglm.py` block anyway, but removing them here keeps this task's verification self-consistent: ruff must be fully clean at the end of Task 2, not carrying two known failures across tasks.
 
 For example, in `src/ablms/encoders/igbert.py`, this becomes a single line:
 
@@ -174,7 +176,7 @@ python -m pytest -m "not slow" -q 2>&1 | tail -3
 
 Expected: `All checks passed!`, `All done!`, and `253 passed, 16 skipped, 139 deselected`.
 
-The two `iglm.py` F841 errors will still be reported by ruff at this point. That is expected; Step 5 deliberately left them. Re-run this step's verification at the end of Task 5.
+Both tools must be fully clean before committing. If ruff still reports anything, do not proceed.
 
 - [ ] **Step 8: Commit**
 
@@ -608,9 +610,9 @@ Replace the body of the generation loop in `_generate` (lines 120-150). `generat
 
 Add `UnsupportedOperationError` to the existing import from `ablms.exceptions`.
 
-- [ ] **Step 8: Fix both `infill` calls and delete the dead locals**
+- [ ] **Step 8: Fix both `infill` calls**
 
-In the `mask_range is not None` branch, delete the unused `prefix` and `suffix` assignments (the two ruff F841 errors left over from Task 2) and fix the call. Replace lines 175-201 with:
+In the `mask_range is not None` branch, fix the call. (Task 2 already deleted the unused `prefix` and `suffix` locals from this block.) Replace the loop with:
 
 ```python
             start, end = mask_range
