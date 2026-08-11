@@ -817,6 +817,23 @@ class EncoderAbLM(BaseAbLM):
     # Abstract methods that subclasses must implement
 
     @abstractmethod
+    def _tokenize(self, formatted_sequences: list[str]) -> dict[str, torch.Tensor]:
+        """
+        Tokenize formatted sequences.
+
+        Re-declared here (narrower than `BaseAbLM._tokenize`) because every
+        encoder tokenizes via a HuggingFace-style tokenizer and returns
+        tensors, unlike generative models which may tokenize internally.
+
+        Args:
+            formatted_sequences: List of formatted sequence strings.
+
+        Returns:
+            Dictionary of tokenized tensors (input_ids, attention_mask, etc.).
+        """
+        pass
+
+    @abstractmethod
     def _forward_embeddings(
         self,
         tokenized: dict[str, torch.Tensor],

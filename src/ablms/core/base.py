@@ -255,8 +255,12 @@ class BaseAbLM(ABC):
         """
         pass
 
+    # Intentionally permissive: generative models (see GenerativeAbLM) may
+    # tokenize internally and return non-tensor payloads. EncoderAbLM
+    # re-declares this method with the stricter `dict[str, torch.Tensor]`
+    # return type that all concrete encoders actually use.
     @abstractmethod
-    def _tokenize(self, formatted_sequences: list[str]) -> dict[str, torch.Tensor]:
+    def _tokenize(self, formatted_sequences: list[str]) -> dict[str, Any]:
         """
         Tokenize formatted sequences.
 
@@ -264,7 +268,9 @@ class BaseAbLM(ABC):
             formatted_sequences: List of formatted sequence strings.
 
         Returns:
-            Dictionary of tokenized tensors (input_ids, attention_mask, etc.).
+            Dictionary of tokenized values. Encoder models return tensors
+            (input_ids, attention_mask, etc.); generative models may return
+            other payloads such as raw sequence strings.
         """
         pass
 
