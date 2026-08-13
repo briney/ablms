@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+import weakref
 from dataclasses import dataclass, field
 
 import pytest
@@ -384,13 +385,13 @@ class TestStalledWorkerDiagnostics:
             executor.shutdown()
 
 
-class TestPadTensorsToMaxLength:
-    """Padding must not assume which axis carries sequence length.
+class TestConcatBatchesPadding:
+    """Combining must not assume which axis carries sequence length.
 
     It is dim 1 for [batch, seq, hidden] but dim 2 for the multi-layer
-    [batch, layers, seq, hidden]. The rule that covers both: every tensor in a
-    group has the same shape except along the axis that varies, so pad whichever
-    non-batch axes actually differ. Dim 0 is the concatenation axis.
+    [batch, layers, seq, hidden]. The rule that covers both: every non-batch
+    axis is sized to the largest seen and each batch is written at the origin,
+    so the leftover region is zero fill. Dim 0 is the concatenation axis.
     """
 
     @pytest.fixture
@@ -398,43 +399,199 @@ class TestPadTensorsToMaxLength:
         return MultiGPUExecutor(FakeWorkerModel, {}, [torch.device("cpu")])
 
     def test_pads_three_dimensional_on_sequence_axis(self, executor):
-        """The pre-existing [batch, seq, hidden] behaviour is unchanged."""
-        tensors = [torch.ones(2, 5, 4), torch.ones(3, 7, 4)]
-        padded = executor._pad_tensors_to_max_length(tensors)
+        combined = executor._concat_batches([torch.ones(2, 5, 4), torch.ones(3, 7, 4)])
 
-        assert [tuple(t.shape) for t in padded] == [(2, 7, 4), (3, 7, 4)]
-        assert torch.cat(padded, dim=0).shape == (5, 7, 4)
-        assert padded[0][:, 5:, :].eq(0).all()
+        assert combined.shape == (5, 7, 4)
+        assert combined[:2, :5, :].eq(1).all()
+        assert combined[:2, 5:, :].eq(0).all()
 
     def test_pads_two_dimensional_mask(self, executor):
-        """[batch, seq] attention masks are padded the same way."""
-        padded = executor._pad_tensors_to_max_length(
-            [torch.ones(2, 5), torch.ones(3, 7)]
-        )
-        assert [tuple(t.shape) for t in padded] == [(2, 7), (3, 7)]
+        combined = executor._concat_batches([torch.ones(2, 5), torch.ones(3, 7)])
+
+        assert combined.shape == (5, 7)
+        assert combined[:2, 5:].eq(0).all()
 
     def test_pads_four_dimensional_on_sequence_axis(self, executor):
         """[batch, layers, seq, hidden] pads dim 2, leaving the layer axis alone."""
-        tensors = [torch.ones(2, 3, 5, 4), torch.ones(1, 3, 7, 4)]
-        padded = executor._pad_tensors_to_max_length(tensors)
+        combined = executor._concat_batches(
+            [torch.ones(2, 3, 5, 4), torch.ones(1, 3, 7, 4)]
+        )
 
-        assert [tuple(t.shape) for t in padded] == [(2, 3, 7, 4), (1, 3, 7, 4)]
-        assert torch.cat(padded, dim=0).shape == (3, 3, 7, 4)
-        assert padded[0][:, :, 5:, :].eq(0).all()
+        assert combined.shape == (3, 3, 7, 4)
+        assert combined[:2, :, 5:, :].eq(0).all()
+        assert combined[:2, :, :5, :].eq(1).all()
 
     def test_leaves_batch_axis_alone(self, executor):
         """Dim 0 is the concatenation axis and must never be padded."""
-        padded = executor._pad_tensors_to_max_length(
-            [torch.ones(2, 5, 4), torch.ones(3, 5, 4)]
+        combined = executor._concat_batches([torch.ones(2, 5, 4), torch.ones(3, 5, 4)])
+
+        assert combined.shape == (5, 5, 4)
+        assert combined.eq(1).all()
+
+    def test_one_dimensional_batches_are_concatenated(self, executor):
+        combined = executor._concat_batches([torch.ones(3), torch.ones(5)])
+
+        assert combined.shape == (8,)
+        assert combined.eq(1).all()
+
+    def test_differing_rank_is_rejected(self, executor):
+        with pytest.raises(ValueError, match="rank"):
+            executor._concat_batches([torch.ones(2, 5), torch.ones(2, 5, 4)])
+
+    def test_zero_dimensional_is_rejected(self, executor):
+        with pytest.raises(ValueError, match="zero-dimensional"):
+            executor._concat_batches([torch.tensor(1.0)])
+
+
+class TestConcatBatchesReleasesInputs:
+    """_concat_batches must not hold its inputs and its output at once.
+
+    `torch.cat` builds the output while every input is still referenced, so the
+    peak is the sum of both. Writing into a preallocated output and dropping
+    each batch as it is copied keeps roughly one result's worth resident.
+    """
+
+    @pytest.fixture
+    def executor(self):
+        return MultiGPUExecutor(FakeWorkerModel, {}, [torch.device("cpu")])
+
+    def test_batch_tensors_are_freed_as_they_are_combined(self, executor):
+        """No input batch may survive the call that consumes it."""
+        tensors = [torch.ones(2, 4) for _ in range(3)]
+        refs = [weakref.ref(t) for t in tensors]
+
+        combined = executor._concat_batches(tensors)
+        del tensors
+
+        assert combined.shape == (6, 4)
+        assert combined.eq(1).all()
+        assert all(ref() is None for ref in refs), (
+            "batch tensors still alive after combining, so peak memory is 2x "
+            "the output"
         )
-        assert [tuple(t.shape) for t in padded] == [(2, 5, 4), (3, 5, 4)]
 
-    def test_returns_unchanged_when_nothing_differs(self, executor):
-        tensors = [torch.ones(2, 5, 4), torch.ones(2, 5, 4)]
-        padded = executor._pad_tensors_to_max_length(tensors)
-        assert [tuple(t.shape) for t in padded] == [(2, 5, 4), (2, 5, 4)]
+    def test_dtype_is_preserved(self, executor):
+        combined = executor._concat_batches([torch.ones(2, 4, dtype=torch.float16)])
+        assert combined.dtype == torch.float16
 
-    def test_empty_and_one_dimensional_are_passed_through(self, executor):
-        assert executor._pad_tensors_to_max_length([]) == []
-        singles = [torch.ones(3), torch.ones(5)]
-        assert executor._pad_tensors_to_max_length(singles) is singles
+
+class _TrackingModel:
+    """Records how many of the tensors it has returned are still alive."""
+
+    instances: list[_TrackingModel] = []
+
+    def __init__(self, devices=None, **kwargs):
+        self.refs: list[weakref.ref] = []
+        self.max_alive = 0
+        _TrackingModel.instances.append(self)
+
+    def _process_tracked_batch(self, sequences):
+        alive = sum(1 for ref in self.refs if ref() is not None)
+        self.max_alive = max(self.max_alive, alive)
+        tensor = torch.ones(len(sequences), 4)
+        self.refs.append(weakref.ref(tensor))
+        return tensor, None, [{"item": (0, 1)} for _ in sequences]
+
+
+class _RaggedModel:
+    """Returns batches whose sequence axis depends on the batch contents."""
+
+    def __init__(self, devices=None, **kwargs):
+        pass
+
+    def _process_ragged_batch(self, sequences):
+        seq_len = 3 + int(sequences[0])
+        tensor = torch.ones(len(sequences), seq_len, 2)
+        mask = torch.ones(len(sequences), seq_len)
+        return tensor, mask, [{"item": (0, 1)} for _ in sequences]
+
+
+class TestExecuteStreamsIntoOutput:
+    """execute() must fill its output as batches arrive, not accumulate first.
+
+    Freeing a batch after the output is allocated does not help: a pooled batch
+    is small enough to stay in the heap arena, where free() returns nothing to
+    the OS, and the output was already allocated as one large mapping that
+    cannot reuse it. The output therefore has to exist before the batches do,
+    so each batch's memory is recycled by the next.
+    """
+
+    def test_batches_are_not_all_held_at_once(self):
+        """The whole point: batch k must be released before batch k+2 exists."""
+        _TrackingModel.instances.clear()
+        executor = MultiGPUExecutor(_TrackingModel, {}, [torch.device("cpu")])
+        try:
+            combined, mask, offsets = executor.execute(
+                "_process_tracked_batch",
+                sequences=list(range(40)),
+                batch_size=4,
+                show_progress=False,
+            )
+        finally:
+            executor.shutdown()
+
+        model = _TrackingModel.instances[0]
+        assert combined.shape == (40, 4)
+        assert combined.eq(1).all()
+        assert mask is None
+        assert len(offsets) == 40
+        assert model.max_alive <= 2, (
+            f"{model.max_alive} of 10 batch tensors were alive at once; "
+            f"execute() is accumulating every batch before combining"
+        )
+
+    def test_ragged_batches_growing_are_padded(self):
+        """A later batch longer than the first must still combine correctly."""
+        executor = MultiGPUExecutor(_RaggedModel, {}, [torch.device("cpu")])
+        try:
+            combined, mask, offsets = executor.execute(
+                "_process_ragged_batch",
+                sequences=[0, 0, 0, 0, 4, 4, 4, 4],
+                batch_size=4,
+                show_progress=False,
+            )
+        finally:
+            executor.shutdown()
+
+        assert combined.shape == (8, 7, 2)
+        assert combined[:4, :3, :].eq(1).all()
+        assert combined[:4, 3:, :].eq(0).all(), "short batch must be zero-padded"
+        assert combined[4:].eq(1).all()
+        assert mask.shape == (8, 7)
+        assert len(offsets) == 8
+
+    def test_ragged_batches_shrinking_are_padded(self):
+        """A later batch shorter than the first pads into the existing width."""
+        executor = MultiGPUExecutor(_RaggedModel, {}, [torch.device("cpu")])
+        try:
+            combined, _, _ = executor.execute(
+                "_process_ragged_batch",
+                sequences=[4, 4, 4, 4, 0, 0, 0, 0],
+                batch_size=4,
+                show_progress=False,
+            )
+        finally:
+            executor.shutdown()
+
+        assert combined.shape == (8, 7, 2)
+        assert combined[:4].eq(1).all()
+        assert combined[4:, :3, :].eq(1).all()
+        assert combined[4:, 3:, :].eq(0).all(), "short batch must be zero-padded"
+
+    def test_non_tensor_results_still_combine(self):
+        """List-returning methods (pseudo_ll, fill_mask) are unaffected."""
+        executor = MultiGPUExecutor(FakeWorkerModel, {}, [torch.device("cpu")])
+        try:
+            values, _, offsets = executor.execute(
+                "_process_echo_batch",
+                sequences=[1, 2, 3, 4, 5],
+                batch_size=2,
+                show_progress=False,
+                scale=10,
+            )
+        finally:
+            executor.shutdown()
+
+        assert values.shape == (5, 2)
+        assert values[:, 0].tolist() == [10.0, 20.0, 30.0, 40.0, 50.0]
+        assert len(offsets) == 5
