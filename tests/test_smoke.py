@@ -13,9 +13,15 @@ this library's wrapper code.
 
 The assertions here deliberately check *meaning* rather than shape. An earlier
 version asserted only `embeddings.shape[-1] == 512`, which passes even when
-every residue has silently become `[UNK]` — the exact failure mode that hid one
-of the three upstream bugs these tests now cover. See
-`EncoderAbLM`/`GenerativeAbLM` `_load_model` compatibility shims and issue #5.
+every residue has silently become `[UNK]`. That is not hypothetical: it is
+precisely what hid one of the five bugs these tests now cover, three upstream
+and two in this library's own AntiBERTy wrapper. A model that loads and returns
+correctly shaped garbage is the failure mode to defend against, so each test
+asserts something a broken model would get wrong - different sequences must
+embed differently, probabilities must sum to one, and a real VH must outscore
+poly-alanine.
+
+See `ablms.utils.compat` for the upstream shims and issue #5 for the history.
 """
 
 from __future__ import annotations

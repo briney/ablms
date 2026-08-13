@@ -27,9 +27,9 @@ pytest -v
 # Reproduce CI's blocking test job (excludes tests that load real model weights)
 python -m pytest -m "not slow"
 
-# Reproduce CI's non-blocking smoke job (bundled-weight models, offline).
-# Currently expected to fail: IgLM and AntiBERTy are broken under
-# transformers 5.x (tracking issue #5).
+# Reproduce CI's smoke job: bundled-weight models (IgLM, AntiBERTy) exercised
+# offline, no network or GPU. These assert on meaning rather than shape, so
+# they catch a model that loads and returns correctly shaped garbage.
 python -m pytest -m smoke
 
 # Linting and formatting

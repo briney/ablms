@@ -64,16 +64,14 @@ jobs:
       - run: python -m pytest -m "not slow"
 
   smoke:
-    name: smoke (bundled weights, non-blocking)
+    name: smoke (bundled weights)
     runs-on: ubuntu-latest
-    # IgLM and AntiBERTy are broken under transformers 5.x. This job reports
-    # that breakage without blocking merges. With continue-on-error: true,
-    # this job reports success to branch protection even when its tests
-    # fail, so marking it "required" alone would not make it blocking.
-    # Once the transformers-compatibility work lands, make it blocking by
-    # removing continue-on-error below (only then does marking it required
-    # in branch protection have any effect).
-    continue-on-error: true
+    # Blocking. IgLM and AntiBERTy bundle their weights, so these run offline
+    # with no GPU, and both models are now functional under transformers 5.x.
+    # This job previously carried continue-on-error: true while they were
+    # broken; that setting made the job report success to branch protection
+    # regardless of outcome, so it has been removed rather than merely
+    # un-marked. Add `smoke (bundled weights)` to the required checks.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

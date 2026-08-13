@@ -1,7 +1,9 @@
 # Automated CI via GitHub Actions
 
 **Date:** 2026-08-10
-**Status:** Awaiting review
+**Status:** Implemented. See "Addendum: transformers 5.x resolved" at the end — the
+`smoke` job described below as non-blocking is now blocking, because the breakage it
+was built to report has been fixed.
 
 ## Problem
 
@@ -92,7 +94,7 @@ parallel:
 | `lint` | 3.12 | `ruff`, `black` only | `ruff check src/ tests/`, `black --check src/ tests/` | yes |
 | `typecheck` | 3.12 | project + `ty` | `ty check src/ --output-format github` | yes |
 | `test` | 3.10, 3.11, 3.12 | project | `pytest -m "not slow"` | yes |
-| `smoke` | 3.12 | project | `pytest -m smoke` | **no** (`continue-on-error`) |
+| `smoke` | 3.12 | project | `pytest -m smoke` | **no** (`continue-on-error`) — now **yes**, see addendum |
 
 `lint` installs no project dependencies and finishes in seconds. `typecheck` must install the
 real dependencies, because ty resolves third-party imports through the environment — without
@@ -351,3 +353,54 @@ non-blocking smoke job have something to point at.
   Hub is unreachable (`test_model_metadata.py:144-145`), so the worst CI outcome is a skipped
   test rather than a failure. Acceptable as-is, but it means those 16 skips may become passes or
   stay skips depending on Hub reachability and rate limiting from GitHub runners.
+
+---
+
+## Addendum: transformers 5.x resolved (2026-08-13)
+
+The body of this spec treats the IgLM and AntiBERTy breakage as an external problem
+needing its own project, and sizes it as "the likely fix is a `transformers<5` upper
+bound, validated against all ten models". That estimate was wrong, in a useful
+direction: no pin was needed. Investigation found **five** one-line bugs rather than
+two model-sized problems.
+
+Upstream, in packages this library wraps:
+
+1. `iglm` and `antiberty` both construct tokenizers with `vocab_file=`, which
+   transformers 5 renamed to `vocab=`. The old keyword is absorbed by `**kwargs`
+   with no error, so the vocabulary silently never loads and the tokenizer holds
+   only its five special tokens.
+2. `antiberty`'s model class ends `__init__` with the pre-4.6 `init_weights()`
+   instead of `post_init()`. Only `post_init()` populates `all_tied_weights_keys`;
+   `init_weights()` merely consumes it.
+
+In this library's own AntiBERTy wrapper, all invisible because the model could never
+load:
+
+3. `_format_for_model` returned unspaced residues, but AntiBERTy's vocabulary is
+   per-residue and its tokenizer is WordPiece — so every input collapsed to
+   `[CLS] [UNK] [SEP]`, three tokens regardless of content.
+4. Three sites resolved the mask id via `convert_tokens_to_ids("_")`, and `"_"` is
+   not in the vocabulary.
+5. Four sites read `outputs.logits`, but `AntiBERTyOutput` names its masked-LM head
+   `prediction_logits`. The positional fallback obscured this: `loss` defaults to
+   the integer `0` rather than `None`, so `outputs[0]` returned that `0`.
+
+The upstream two are repaired by detection-based shims in `ablms/utils/compat.py`,
+each conditional on observing the actual symptom so it no-ops if upstream is fixed
+and works on transformers 4 and 5 alike. Runtime dependencies stay unpinned.
+
+### What this changed about the design
+
+The `smoke` job is now **blocking**, and `continue-on-error: true` has been removed
+rather than merely left in place — that setting made the job report success to branch
+protection regardless of outcome, so removing it is what makes "required" meaningful.
+`smoke (bundled weights)` should be added to the required checks.
+
+The spec's own reasoning for the job was vindicated more sharply than intended. It
+argued the job was needed because "CI can be entirely green while models are broken".
+That proved true of the *tests* as well as the suite: the original assertion
+`embeddings.shape[-1] == 512` passes when every residue is `[UNK]`, and that weakness
+is what concealed bug 3. The assertions now check meaning — different sequences must
+embed differently, probabilities must sum to one, and a real VH must outscore
+poly-alanine (-15.8 against -78.7).
