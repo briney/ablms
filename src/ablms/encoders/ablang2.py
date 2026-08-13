@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 import torch
 import torch.nn.functional as F
 
@@ -85,9 +84,7 @@ class AbLang2(EncoderAbLM):
         # Get tokenizer
         self._tokenizer = self._ablang.tokenizer
 
-    def _format_for_model(
-        self, sequences: list[AntibodySequence]
-    ) -> list[str]:
+    def _format_for_model(self, sequences: list[AntibodySequence]) -> list[str]:
         """
         Format sequences for AbLang2.
 
@@ -115,9 +112,7 @@ class AbLang2(EncoderAbLM):
 
         return formatted
 
-    def _tokenize(
-        self, formatted_sequences: list[str]
-    ) -> dict[str, torch.Tensor]:
+    def _tokenize(self, formatted_sequences: list[str]) -> dict[str, torch.Tensor]:
         """Tokenize formatted sequences using AbLang2 tokenizer."""
         # AbLang2 tokenizer doesn't support return_tensors - returns tensor directly
         # Use w_extra_tkns=False since we pre-format sequences as <heavy>|<light>
@@ -179,7 +174,9 @@ class AbLang2(EncoderAbLM):
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """Forward pass to get embeddings from a specific layer."""
         input_ids = tokenized["input_ids"]
-        num_layers = len(self._model.encoder_blocks) + 1  # 0 is embedding, 1-12 are encoder blocks
+        num_layers = (
+            len(self._model.encoder_blocks) + 1
+        )  # 0 is embedding, 1-12 are encoder blocks
 
         # Convert negative layer index to positive
         if layer < 0:
@@ -205,7 +202,9 @@ class AbLang2(EncoderAbLM):
     ) -> tuple[list[torch.Tensor], torch.Tensor | None]:
         """Forward pass to get all hidden states."""
         input_ids = tokenized["input_ids"]
-        num_layers = len(self._model.encoder_blocks) + 1  # 0 is embedding, 1-12 are encoder blocks
+        num_layers = (
+            len(self._model.encoder_blocks) + 1
+        )  # 0 is embedding, 1-12 are encoder blocks
 
         with torch.no_grad():
             # Request all layers (0 = embedding, 1-12 = encoder blocks)
@@ -236,7 +235,9 @@ class AbLang2(EncoderAbLM):
         else:
             # Return empty attention if not available
             batch_size, seq_len = input_ids.shape
-            attentions = torch.zeros(batch_size, 1, 1, seq_len, seq_len, device=self._primary_device)
+            attentions = torch.zeros(
+                batch_size, 1, 1, seq_len, seq_len, device=self._primary_device
+            )
 
         attention_mask = (input_ids != self._tokenizer.pad_token).long()
 
@@ -286,7 +287,7 @@ class AbLang2(EncoderAbLM):
                 continue
 
             masked_ids = input_ids.clone()
-            original_token = input_ids[i].item()
+            original_token = int(input_ids[i].item())
             masked_ids[i] = mask_token_id
 
             inputs = {"input_ids": masked_ids.unsqueeze(0)}
@@ -406,7 +407,9 @@ class AbLang2(EncoderAbLM):
 
             seq_len = len(tokens)
             logits = torch.zeros(seq_len, vocab_size, device=self._primary_device)
-            valid_mask = torch.zeros(seq_len, dtype=torch.bool, device=self._primary_device)
+            valid_mask = torch.zeros(
+                seq_len, dtype=torch.bool, device=self._primary_device
+            )
 
             # Build list of positions to mask (skip special tokens)
             positions_to_mask = []
@@ -416,7 +419,9 @@ class AbLang2(EncoderAbLM):
 
             # Process masked variants in batches
             for batch_start in range(0, len(positions_to_mask), batch_size):
-                batch_positions = positions_to_mask[batch_start:batch_start + batch_size]
+                batch_positions = positions_to_mask[
+                    batch_start : batch_start + batch_size
+                ]
 
                 # Create masked variants for this batch
                 masked_variants = []
@@ -430,7 +435,9 @@ class AbLang2(EncoderAbLM):
 
                 # Single batched forward pass
                 with torch.no_grad():
-                    output_logits, _ = self._forward_logits({"input_ids": batch_input_ids})
+                    output_logits, _ = self._forward_logits(
+                        {"input_ids": batch_input_ids}
+                    )
 
                 # Extract logits for each masked position
                 for batch_idx, pos in enumerate(batch_positions):

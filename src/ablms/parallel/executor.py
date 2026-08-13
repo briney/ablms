@@ -14,6 +14,8 @@ from ablms.parallel.utils import DEFAULT_SUBMISSION_WINDOW, WORKER_TIMEOUT
 from ablms.parallel.worker import WorkerHandle
 
 if TYPE_CHECKING:
+    from multiprocessing.context import SpawnContext
+
     from ablms.core.base import BaseAbLM
     from ablms.core.sequence import AntibodySequence
 
@@ -110,7 +112,7 @@ class MultiGPUExecutor:
         # Worker management (initialized lazily)
         self._workers: list[WorkerHandle] | None = None
         self._result_queue: mp.Queue | None = None
-        self._mp_context: mp.context.SpawnContext | None = None
+        self._mp_context: SpawnContext | None = None
 
         # Single-device mode: local model (initialized lazily)
         self._local_model: BaseAbLM | None = None
@@ -187,6 +189,22 @@ class MultiGPUExecutor:
                 f"Worker initialization failed: {error['exception']}\n"
                 f"{error.get('traceback', '')}"
             )
+
+    def _require_workers(self) -> list[WorkerHandle]:
+        """The worker handles, which exist only after initialization."""
+        if self._workers is None:
+            raise RuntimeError(
+                "Workers have not been initialized; call _ensure_initialized() first."
+            )
+        return self._workers
+
+    def _require_result_queue(self) -> mp.Queue:
+        """The result queue, which exists only after initialization."""
+        if self._result_queue is None:
+            raise RuntimeError(
+                "Result queue not initialized; call _ensure_initialized() first."
+            )
+        return self._result_queue
 
     def execute(
         self,
@@ -322,7 +340,9 @@ class MultiGPUExecutor:
         from ablms.exceptions import WorkerError
 
         total = len(batches)
-        num_workers = len(self._workers)
+        workers = self._require_workers()
+        result_queue = self._require_result_queue()
+        num_workers = len(workers)
 
         task_worker: dict[int, int] = {}
         pending: dict[int, Any] = {}
@@ -331,7 +351,7 @@ class MultiGPUExecutor:
 
         def submit(batch_idx: int, worker_idx: int) -> None:
             task_worker[batch_idx] = worker_idx
-            self._workers[worker_idx].submit_task(
+            workers[worker_idx].submit_task(
                 task_id=batch_idx,
                 method_name=method_name,
                 sequences=batches[batch_idx],
@@ -354,9 +374,7 @@ class MultiGPUExecutor:
 
             while next_to_yield < total:
                 try:
-                    msg_type, task_id, data = self._result_queue.get(
-                        timeout=WORKER_TIMEOUT
-                    )
+                    msg_type, task_id, data = result_queue.get(timeout=WORKER_TIMEOUT)
                 except queue.Empty:
                     error = self._stalled_error()
                     # The workers are gone, so nothing is left to reclaim.
@@ -411,7 +429,7 @@ class MultiGPUExecutor:
         """
         for _ in range(count):
             try:
-                self._result_queue.get(timeout=WORKER_TIMEOUT)
+                self._require_result_queue().get(timeout=WORKER_TIMEOUT)
             except (queue.Empty, EOFError, OSError, RuntimeError, ValueError):
                 # Nothing arrived within the timeout, or the queue is already
                 # torn down. A worker that died mid-flight can also surface as
@@ -439,7 +457,7 @@ class MultiGPUExecutor:
 
         from ablms.exceptions import MultiGPUError, SharedMemoryError
 
-        dead = [w.worker_id for w in self._workers if not w.is_alive]
+        dead = [w.worker_id for w in self._require_workers() if not w.is_alive]
         self._shutdown_workers_fast()
 
         if dead:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -70,15 +71,18 @@ class AbLang(EncoderAbLM):
         """
         super().__init__(device=device, devices=devices)
         # Lazy-loaded models
-        self._heavy_model = None
-        self._light_model = None
-        self._ablang_module = None
+        self._heavy_model: Any = None
+        self._light_model: Any = None
+        self._ablang_module: Any = None
         self._load_model()
 
     def _load_model(self) -> None:
         """Verify ablang package is available; models are loaded lazily."""
         try:
-            import ablang
+            # AbLang v1 is not a declared dependency (not installed in the dev
+            # environment), so ty cannot resolve this import. See issue #6.
+            import ablang  # ty: ignore[unresolved-import]
+
             self._ablang_module = ablang
         except ImportError as e:
             raise ModelLoadError(
@@ -93,7 +97,9 @@ class AbLang(EncoderAbLM):
             self._heavy_model.freeze()
             # Move to device
             if hasattr(self._heavy_model, "AbRep"):
-                self._heavy_model.AbRep = self._heavy_model.AbRep.to(self._primary_device)
+                self._heavy_model.AbRep = self._heavy_model.AbRep.to(
+                    self._primary_device
+                )
         return self._heavy_model
 
     def _get_light_model(self):
@@ -103,7 +109,9 @@ class AbLang(EncoderAbLM):
             self._light_model.freeze()
             # Move to device
             if hasattr(self._light_model, "AbRep"):
-                self._light_model.AbRep = self._light_model.AbRep.to(self._primary_device)
+                self._light_model.AbRep = self._light_model.AbRep.to(
+                    self._primary_device
+                )
         return self._light_model
 
     def _get_model_for_sequence(self, seq: AntibodySequence):
@@ -117,9 +125,7 @@ class AbLang(EncoderAbLM):
         """Determine if sequence is a heavy chain."""
         return seq.heavy_chain is not None
 
-    def _format_for_model(
-        self, sequences: list[AntibodySequence]
-    ) -> list[str]:
+    def _format_for_model(self, sequences: list[AntibodySequence]) -> list[str]:
         """
         Format sequences for AbLang.
 
@@ -127,7 +133,7 @@ class AbLang(EncoderAbLM):
         """
         formatted = []
         for seq in sequences:
-            sequence = seq.heavy_chain or seq.light_chain
+            sequence = seq.primary_chain
 
             # Convert unified mask token to AbLang mask token
             sequence = sequence.replace(AntibodySequence.MASK_TOKEN, self.mask_token)
@@ -136,9 +142,7 @@ class AbLang(EncoderAbLM):
 
         return formatted
 
-    def _tokenize(
-        self, formatted_sequences: list[str]
-    ) -> dict[str, torch.Tensor]:
+    def _tokenize(self, formatted_sequences: list[str]) -> dict[str, torch.Tensor]:
         """Tokenize formatted sequences using AbLang tokenizer.
 
         Note: This method requires a model to be selected first via
@@ -243,7 +247,9 @@ class AbLang(EncoderAbLM):
     def _process_hidden_states_batch(
         self,
         sequences: list[AntibodySequence],
-    ) -> tuple[list[torch.Tensor], torch.Tensor | None, list[dict[str, tuple[int, int]]]]:
+    ) -> tuple[
+        list[torch.Tensor], torch.Tensor | None, list[dict[str, tuple[int, int]]]
+    ]:
         """Process a batch for hidden states from all layers."""
         return self._process_mixed_batch(
             sequences,
@@ -272,9 +278,7 @@ class AbLang(EncoderAbLM):
         """Process a batch for MLM logits."""
         return self._process_mixed_batch(
             sequences,
-            process_fn=lambda seqs, model: self._forward_logits_with_model(
-                seqs, model
-            ),
+            process_fn=lambda seqs, model: self._forward_logits_with_model(seqs, model),
         )
 
     def _process_mixed_batch(
@@ -299,9 +303,9 @@ class AbLang(EncoderAbLM):
                 light_indices.append(i)
 
         # Process each partition
-        results = [None] * len(sequences)
-        masks = [None] * len(sequences)
-        offsets = [None] * len(sequences)
+        results: list[Any] = [None] * len(sequences)
+        masks: list[Any] = [None] * len(sequences)
+        offsets: list[Any] = [None] * len(sequences)
 
         if heavy_indices:
             heavy_seqs = [sequences[i] for i in heavy_indices]
@@ -311,13 +315,23 @@ class AbLang(EncoderAbLM):
             if is_hidden_states:
                 # h_results is a list of tensors (one per layer)
                 for batch_idx, orig_idx in enumerate(heavy_indices):
-                    results[orig_idx] = [layer[batch_idx:batch_idx+1] for layer in h_results]
-                    masks[orig_idx] = h_masks[batch_idx:batch_idx+1] if h_masks is not None else None
+                    results[orig_idx] = [
+                        layer[batch_idx : batch_idx + 1] for layer in h_results
+                    ]
+                    masks[orig_idx] = (
+                        h_masks[batch_idx : batch_idx + 1]
+                        if h_masks is not None
+                        else None
+                    )
                     offsets[orig_idx] = h_offsets[batch_idx]
             else:
                 for batch_idx, orig_idx in enumerate(heavy_indices):
-                    results[orig_idx] = h_results[batch_idx:batch_idx+1]
-                    masks[orig_idx] = h_masks[batch_idx:batch_idx+1] if h_masks is not None else None
+                    results[orig_idx] = h_results[batch_idx : batch_idx + 1]
+                    masks[orig_idx] = (
+                        h_masks[batch_idx : batch_idx + 1]
+                        if h_masks is not None
+                        else None
+                    )
                     offsets[orig_idx] = h_offsets[batch_idx]
 
         if light_indices:
@@ -327,13 +341,23 @@ class AbLang(EncoderAbLM):
 
             if is_hidden_states:
                 for batch_idx, orig_idx in enumerate(light_indices):
-                    results[orig_idx] = [layer[batch_idx:batch_idx+1] for layer in l_results]
-                    masks[orig_idx] = l_masks[batch_idx:batch_idx+1] if l_masks is not None else None
+                    results[orig_idx] = [
+                        layer[batch_idx : batch_idx + 1] for layer in l_results
+                    ]
+                    masks[orig_idx] = (
+                        l_masks[batch_idx : batch_idx + 1]
+                        if l_masks is not None
+                        else None
+                    )
                     offsets[orig_idx] = l_offsets[batch_idx]
             else:
                 for batch_idx, orig_idx in enumerate(light_indices):
-                    results[orig_idx] = l_results[batch_idx:batch_idx+1]
-                    masks[orig_idx] = l_masks[batch_idx:batch_idx+1] if l_masks is not None else None
+                    results[orig_idx] = l_results[batch_idx : batch_idx + 1]
+                    masks[orig_idx] = (
+                        l_masks[batch_idx : batch_idx + 1]
+                        if l_masks is not None
+                        else None
+                    )
                     offsets[orig_idx] = l_offsets[batch_idx]
 
         # Concatenate results
@@ -345,11 +369,19 @@ class AbLang(EncoderAbLM):
             for layer_idx in range(num_layers):
                 layer_tensors = [results[i][layer_idx] for i in range(len(sequences))]
                 combined_hidden_states.append(torch.cat(layer_tensors, dim=0).cpu())
-            combined_masks = torch.cat([m for m in masks if m is not None], dim=0).cpu() if any(m is not None for m in masks) else None
+            combined_masks = (
+                torch.cat([m for m in masks if m is not None], dim=0).cpu()
+                if any(m is not None for m in masks)
+                else None
+            )
             return combined_hidden_states, combined_masks, offsets
         else:
             combined_results = torch.cat(results, dim=0).cpu()
-            combined_masks = torch.cat([m for m in masks if m is not None], dim=0).cpu() if any(m is not None for m in masks) else None
+            combined_masks = (
+                torch.cat([m for m in masks if m is not None], dim=0).cpu()
+                if any(m is not None for m in masks)
+                else None
+            )
             return combined_results, combined_masks, offsets
 
     def _forward_embeddings_with_model(
@@ -388,7 +420,9 @@ class AbLang(EncoderAbLM):
         self,
         sequences: list[AntibodySequence],
         model,
-    ) -> tuple[list[torch.Tensor], torch.Tensor | None, list[dict[str, tuple[int, int]]]]:
+    ) -> tuple[
+        list[torch.Tensor], torch.Tensor | None, list[dict[str, tuple[int, int]]]
+    ]:
         """Forward pass to get all hidden states using a specific model."""
         formatted = self._format_for_model(sequences)
         tokenized = self._tokenize_with_model(formatted, model)
@@ -429,7 +463,9 @@ class AbLang(EncoderAbLM):
             attentions = torch.stack(attentions_list, dim=1)
         else:
             batch_size, seq_len = input_ids.shape
-            attentions = torch.zeros(batch_size, 1, 1, seq_len, seq_len, device=self._primary_device)
+            attentions = torch.zeros(
+                batch_size, 1, 1, seq_len, seq_len, device=self._primary_device
+            )
 
         attention_mask = (input_ids != model.tokenizer.pad_token).long()
 
@@ -517,7 +553,7 @@ class AbLang(EncoderAbLM):
                 continue
 
             masked_ids = input_ids.clone()
-            original_token = input_ids[i].item()
+            original_token = int(input_ids[i].item())
             masked_ids[i] = mask_token_id
 
             inputs = {"input_ids": masked_ids.unsqueeze(0)}
@@ -630,7 +666,9 @@ class AbLang(EncoderAbLM):
 
             seq_len = len(tokens)
             logits = torch.zeros(seq_len, vocab_size, device=self._primary_device)
-            valid_mask = torch.zeros(seq_len, dtype=torch.bool, device=self._primary_device)
+            valid_mask = torch.zeros(
+                seq_len, dtype=torch.bool, device=self._primary_device
+            )
 
             # Build list of positions to mask (skip special tokens)
             positions_to_mask = []
@@ -640,7 +678,9 @@ class AbLang(EncoderAbLM):
 
             # Process masked variants in batches
             for batch_start in range(0, len(positions_to_mask), batch_size):
-                batch_positions = positions_to_mask[batch_start:batch_start + batch_size]
+                batch_positions = positions_to_mask[
+                    batch_start : batch_start + batch_size
+                ]
 
                 # Create masked variants for this batch
                 masked_variants = []

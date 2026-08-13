@@ -1,8 +1,6 @@
 """Input validation utilities."""
 
-
 from ablms.exceptions import InvalidAminoAcidError, SequenceTooLongError
-
 
 # Valid amino acid characters:
 # - Standard 20 amino acids: ACDEFGHIKLMNPQRSTVWY

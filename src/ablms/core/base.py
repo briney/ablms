@@ -4,18 +4,17 @@ from __future__ import annotations
 
 import warnings
 from abc import ABC, abstractmethod
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 import torch
 
-from ablms.core.sequence import AntibodySequence, Species
+from ablms.core.sequence import AntibodySequence
 from ablms.exceptions import (
-    DeviceError,
     PairedSequenceError,
     SequenceTooLongError,
     ValidationError,
 )
-from ablms.parallel.utils import resolve_devices, resolve_single_device, get_device_info
+from ablms.parallel.utils import get_device_info, resolve_devices, resolve_single_device
 
 if TYPE_CHECKING:
     from ablms.parallel.executor import MultiGPUExecutor
@@ -50,7 +49,9 @@ class BaseAbLM(ABC):
     def __init__(
         self,
         device: str | torch.device | None = None,
-        devices: str | int | list[int | str] | torch.device | list[torch.device] | None = None,
+        devices: (
+            str | int | list[int | str] | torch.device | list[torch.device] | None
+        ) = None,
     ) -> None:
         """
         Initialize the base model.
@@ -80,8 +81,12 @@ class BaseAbLM(ABC):
         self._primary_device = self._devices[0]
         self._is_multi_gpu = len(self._devices) > 1
         self._executor: MultiGPUExecutor | None = None
-        self._model = None
-        self._tokenizer = None
+        # Deliberately `Any`: concrete model and tokenizer types come from
+        # HuggingFace and are dynamically shaped. Subclasses reach for
+        # attributes like `_model.bert` and `_tokenizer.sep_token_id` that no
+        # static `PreTrainedModel` type declares.
+        self._model: Any = None
+        self._tokenizer: Any = None
 
     @property
     def device(self) -> torch.device:
@@ -189,22 +194,19 @@ class BaseAbLM(ABC):
             if not sequences:
                 return []
 
-            # List of strings
+            # Element 0 is representative; a mixed list is a caller error.
             if isinstance(sequences[0], str):
-                return [AntibodySequence(heavy=s) for s in sequences]
+                return [AntibodySequence(heavy=s) for s in cast("list[str]", sequences)]
 
-            # List of AntibodySequence
             if isinstance(sequences[0], AntibodySequence):
-                return sequences
+                return cast("list[AntibodySequence]", sequences)
 
         raise ValidationError(
             f"Invalid input type: {type(sequences)}. Expected str, "
             "AntibodySequence, List[str], or List[AntibodySequence]."
         )
 
-    def _validate_input(
-        self, sequences: list[AntibodySequence]
-    ) -> None:
+    def _validate_input(self, sequences: list[AntibodySequence]) -> None:
         """
         Validate input sequences for this model.
 
@@ -237,9 +239,7 @@ class BaseAbLM(ABC):
                 )
 
     @abstractmethod
-    def _format_for_model(
-        self, sequences: list[AntibodySequence]
-    ) -> list[str]:
+    def _format_for_model(self, sequences: list[AntibodySequence]) -> list[str]:
         """
         Format sequences for model-specific tokenization.
 
@@ -254,10 +254,12 @@ class BaseAbLM(ABC):
         """
         pass
 
+    # Intentionally permissive: generative models (see GenerativeAbLM) may
+    # tokenize internally and return non-tensor payloads. EncoderAbLM
+    # re-declares this method with the stricter `dict[str, torch.Tensor]`
+    # return type that all concrete encoders actually use.
     @abstractmethod
-    def _tokenize(
-        self, formatted_sequences: list[str]
-    ) -> dict[str, torch.Tensor]:
+    def _tokenize(self, formatted_sequences: list[str]) -> dict[str, Any]:
         """
         Tokenize formatted sequences.
 
@@ -265,7 +267,9 @@ class BaseAbLM(ABC):
             formatted_sequences: List of formatted sequence strings.
 
         Returns:
-            Dictionary of tokenized tensors (input_ids, attention_mask, etc.).
+            Dictionary of tokenized values. Encoder models return tensors
+            (input_ids, attention_mask, etc.); generative models may return
+            other payloads such as raw sequence strings.
         """
         pass
 

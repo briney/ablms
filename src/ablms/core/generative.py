@@ -3,8 +3,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
-
-import torch
+from typing import Any
 
 from ablms.core.base import BaseAbLM
 from ablms.core.sequence import AntibodySequence, ChainType, Species
@@ -43,9 +42,14 @@ class GenerativeAbLM(BaseAbLM):
             species: Species for the generated sequence.
             prompt: Optional prompt to condition generation.
             temperature: Sampling temperature (higher = more diverse).
-            top_k: If set, sample from top-k tokens only.
+            top_k: If set, sample from top-k tokens only. Not supported by
+                IgLM, currently the only concrete generative model: it
+                raises `UnsupportedOperationError` if this is set.
             top_p: If set, sample using nucleus sampling.
-            max_length: Maximum sequence length to generate.
+            max_length: Maximum sequence length to generate. Not supported
+                by IgLM, currently the only concrete generative model: it
+                raises `UnsupportedOperationError` if this is set, and
+                upstream hardcodes its own generation length regardless.
             **kwargs: Additional model-specific parameters.
 
         Returns:
@@ -164,6 +168,25 @@ class GenerativeAbLM(BaseAbLM):
         return scores
 
     # Abstract methods that subclasses must implement
+
+    @abstractmethod
+    def _tokenize(self, formatted_sequences: list[str]) -> dict[str, Any]:
+        """
+        Tokenize formatted sequences.
+
+        Unlike encoder models, generative models may tokenize internally
+        (e.g. IgLM defers tokenization to the underlying package) and can
+        return a payload of non-tensor values, such as a dict of raw
+        sequence strings, rather than tensors.
+
+        Args:
+            formatted_sequences: List of formatted sequence strings.
+
+        Returns:
+            Dictionary of tokenized values. For generative models this may
+            contain tensors, raw strings, or other model-specific payloads.
+        """
+        pass
 
     @abstractmethod
     def _generate(

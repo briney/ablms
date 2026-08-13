@@ -4,11 +4,11 @@ import pytest
 import torch
 
 from ablms.utils.pooling import (
-    mean_pooling,
-    max_pooling,
+    apply_pooling,
     cls_pooling,
     last_pooling,
-    apply_pooling,
+    max_pooling,
+    mean_pooling,
 )
 
 

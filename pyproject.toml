@@ -45,16 +45,22 @@ dependencies = [
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
-    "black>=23.0.0",
-    "ruff>=0.1.0",
-    "mypy>=1.0.0",
+    # Tooling is pinned exactly: ty and ruff are pre-1.0 and change diagnostics
+    # between releases, so an unpinned bump would break CI on someone else's
+    # release schedule rather than on a change here.
+    # The lint job in .github/workflows/ci.yml installs ruff/black directly
+    # (skipping this extra) with its own hard-coded versions -- keep the two
+    # pins in step, or the lint job silently checks with a stale tool.
+    "black==26.5.1",
+    "ruff==0.16.2",
+    "ty==0.0.40",
 ]
 
 [project.urls]
-Homepage = "https://github.com/bryanbriney/ablms"
-Documentation = "https://github.com/bryanbriney/ablms#readme"
-Repository = "https://github.com/bryanbriney/ablms"
-Issues = "https://github.com/bryanbriney/ablms/issues"
+Homepage = "https://github.com/briney/ablms"
+Documentation = "https://github.com/briney/ablms#readme"
+Repository = "https://github.com/briney/ablms"
+Issues = "https://github.com/briney/ablms/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ablms"]
@@ -65,6 +71,7 @@ python_files = ["test_*.py"]
 addopts = "-v --tb=short"
 markers = [
     "slow: marks tests that load real model weights (deselect with '-m \"not slow\"')",
+    "smoke: marks tests that instantiate bundled-weight models offline (implies slow)",
 ]
 
 [tool.black]
@@ -77,10 +84,7 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "W", "UP"]
-ignore = ["E501"]
+# E501: line length is enforced by the formatter, not the linter.
+# N812: `import torch.nn.functional as F` is the universal PyTorch convention.
+ignore = ["E501", "N812"]
 
-[tool.mypy]
-python_version = "3.10"
-warn_return_any = true
-warn_unused_configs = true
-ignore_missing_imports = true

@@ -3,13 +3,13 @@
 import pytest
 import torch
 
+from ablms.core.sequence import AntibodySequence
 from ablms.outputs import (
-    EmbeddingOutput,
-    LogitsOutput,
     AttentionOutput,
+    EmbeddingOutput,
     GenerationOutput,
+    LogitsOutput,
 )
-from ablms.core.sequence import AntibodySequence, Species
 
 
 class TestEmbeddingOutput:

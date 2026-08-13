@@ -4,7 +4,6 @@ import pytest
 import torch
 
 from ablms.outputs import MaskScanOutput
-from ablms.core.sequence import AntibodySequence
 
 
 class TestMaskScanOutput:
@@ -632,8 +631,8 @@ class TestBuildMask:
         assert full_mask[24].item() is True
         # Heavy chain: positions 1-11, mask applies
         assert full_mask[1].item() is False  # heavy[0]
-        assert full_mask[4].item() is True   # heavy[3]
-        assert full_mask[7].item() is True   # heavy[6]
+        assert full_mask[4].item() is True  # heavy[3]
+        assert full_mask[7].item() is True  # heavy[6]
         assert full_mask[8].item() is False  # heavy[7]
         # Light chain should all be True (not masked)
         for i in range(13, 24):
@@ -666,8 +665,8 @@ class TestBuildMask:
         for i in range(1, 12):
             assert full_mask[i].item() is True
         # Light chain: positions 13-23
-        assert full_mask[13].item() is True   # light[0]
-        assert full_mask[15].item() is True   # light[2]
+        assert full_mask[13].item() is True  # light[0]
+        assert full_mask[15].item() is True  # light[2]
         assert full_mask[16].item() is False  # light[3]
 
     def test_build_mask_both_chains(self):
@@ -1023,11 +1022,17 @@ class TestChainMethodsWithMask:
         # Heavy chain length is 9, mask length is 5
         wrong_mask = torch.ones(5, dtype=torch.bool)
 
-        with pytest.raises(ValueError, match="mask length 5 doesn't match chain length 9"):
+        with pytest.raises(
+            ValueError, match="mask length 5 doesn't match chain length 9"
+        ):
             output.get_chain_accuracy("heavy", mask=wrong_mask)
 
-        with pytest.raises(ValueError, match="mask length 5 doesn't match chain length 9"):
+        with pytest.raises(
+            ValueError, match="mask length 5 doesn't match chain length 9"
+        ):
             output.get_chain_perplexity("heavy", mask=wrong_mask)
 
-        with pytest.raises(ValueError, match="mask length 5 doesn't match chain length 9"):
+        with pytest.raises(
+            ValueError, match="mask length 5 doesn't match chain length 9"
+        ):
             output.get_chain_entropy("heavy", mask=wrong_mask)

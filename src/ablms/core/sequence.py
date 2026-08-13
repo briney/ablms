@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from enum import Enum
 
 from ablms.exceptions import InvalidAminoAcidError, InvalidSequenceError
@@ -127,6 +126,28 @@ class AntibodySequence:
         return self.heavy_chain is not None and self.light_chain is not None
 
     @property
+    def primary_chain(self) -> str:
+        """
+        The heavy chain if present, otherwise the light chain.
+
+        Single-chain models use this to pick the one sequence they operate on.
+        `__init__` rejects a sequence with neither chain, so this always
+        returns a string.
+
+        Returns:
+            The heavy chain sequence, or the light chain if there is no heavy.
+
+        Raises:
+            InvalidSequenceError: If neither chain is set, which `__init__`
+                should already have prevented.
+        """
+        if self.heavy_chain is not None:
+            return self.heavy_chain
+        if self.light_chain is not None:
+            return self.light_chain
+        raise InvalidSequenceError("AntibodySequence has neither chain set")
+
+    @property
     def is_masked(self) -> bool:
         """Check if any chain contains mask tokens."""
         if self.heavy_chain and self.MASK_TOKEN in self.heavy_chain:
@@ -192,9 +213,7 @@ class AntibodySequence:
         """Get total length across all chains."""
         return sum(self.length.values())
 
-    def with_mask(
-        self, chain: str, positions: list[int]
-    ) -> AntibodySequence:
+    def with_mask(self, chain: str, positions: list[int]) -> AntibodySequence:
         """
         Create a new AntibodySequence with mask tokens at specified positions.
 

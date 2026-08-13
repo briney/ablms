@@ -24,10 +24,18 @@ pytest tests/test_config.py::TestModelRegistry::test_models_registered
 # Run tests with verbose output
 pytest -v
 
+# Reproduce CI's blocking test job (excludes tests that load real model weights)
+python -m pytest -m "not slow"
+
+# Reproduce CI's smoke job: bundled-weight models (IgLM, AntiBERTy) exercised
+# offline, no network or GPU. These assert on meaning rather than shape, so
+# they catch a model that loads and returns correctly shaped garbage.
+python -m pytest -m smoke
+
 # Linting and formatting
 black src/ tests/
 ruff check src/ tests/
-mypy src/
+ty check src/
 ```
 
 ## Code Style

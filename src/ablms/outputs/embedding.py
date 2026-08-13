@@ -199,14 +199,13 @@ class EmbeddingOutput:
         """Move embeddings to CPU."""
         return self.to(torch.device("cpu"))
 
-    def numpy(self) -> "EmbeddingOutput":
+    def numpy(self) -> EmbeddingOutput:
         """
         Convert embeddings to numpy arrays.
 
         Returns:
             New EmbeddingOutput with numpy arrays instead of tensors.
         """
-        import numpy as np
 
         return EmbeddingOutput(
             embeddings=self.embeddings.cpu().numpy(),

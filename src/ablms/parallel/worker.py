@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import traceback
-from typing import Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import torch
 import torch.multiprocessing as mp
 
 if TYPE_CHECKING:
+    from multiprocessing.context import SpawnContext, SpawnProcess
+
     from ablms.core.base import BaseAbLM
 
 
@@ -126,7 +128,7 @@ class WorkerHandle:
         model_init_kwargs: dict[str, Any],
         task_queue: mp.Queue,
         result_queue: mp.Queue,
-        process: mp.Process,
+        process: SpawnProcess,
     ):
         self.worker_id = worker_id
         self.device = device
@@ -145,7 +147,7 @@ class WorkerHandle:
         model_class: type[BaseAbLM],
         model_init_kwargs: dict[str, Any],
         result_queue: mp.Queue,
-        ctx: mp.context.SpawnContext,
+        ctx: SpawnContext,
     ) -> WorkerHandle:
         """
         Spawn a new worker process.

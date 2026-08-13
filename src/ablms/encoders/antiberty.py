@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 import torch
 import torch.nn.functional as F
 
@@ -10,6 +9,7 @@ from ablms.core.encoder import EncoderAbLM
 from ablms.core.sequence import AntibodySequence
 from ablms.exceptions import ModelLoadError
 from ablms.outputs import MaskScanOutput
+from ablms.utils.compat import ensure_post_init_called, repair_bert_tokenizer
 
 
 class AntiBERTy(EncoderAbLM):
@@ -63,35 +63,72 @@ class AntiBERTy(EncoderAbLM):
                 "Install it with: pip install antiberty"
             ) from e
 
+        # AntiBERTy has two transformers 5.x incompatibilities, both upstream.
+        # The first must be repaired before construction, because it raises
+        # inside `from_pretrained`: its model class calls the pre-4.6
+        # `init_weights()` instead of `post_init()`, and only `post_init()`
+        # populates `all_tied_weights_keys`. See ablms.utils.compat, issue #5.
+        from antiberty.AntiBERTyRunner import VOCAB_FILE
+        from antiberty.model.AntiBERTy import AntiBERTy
+
+        ensure_post_init_called(AntiBERTy)
+
         self._runner = AntiBERTyRunner()
+
+        # The second is silent: the runner builds its tokenizer with the
+        # transformers 4 `vocab_file=` keyword, which 5.x ignores, collapsing
+        # every residue to `[UNK]`. Left alone this still returns correctly
+        # shaped embeddings, which is why it went unnoticed - the values are
+        # simply meaningless.
+        self._runner.tokenizer = repair_bert_tokenizer(
+            self._runner.tokenizer,
+            vocab_file=VOCAB_FILE,
+            probe_tokens=["E", "V", "Q", "G"],
+            do_lower_case=False,
+        )
+
         # Move model to device
         self._runner.model = self._runner.model.to(self._primary_device)
         self._runner.model.eval()
         self._model = self._runner.model
         self._tokenizer = self._runner.tokenizer
 
-    def _format_for_model(
-        self, sequences: list[AntibodySequence]
-    ) -> list[str]:
+    def _format_for_model(self, sequences: list[AntibodySequence]) -> list[str]:
         """
-        Format sequences for AntiBERTy.
+        Format sequences for AntiBERTy as whitespace-separated residues.
 
-        AntiBERTy uses "_" as the mask token and expects raw sequences.
+        AntiBERTy's vocabulary is per-residue, and its tokenizer is a WordPiece
+        model, so residues must be whitespace-delimited. An unspaced sequence is
+        treated as a single unknown word and collapses to `[CLS] [UNK] [SEP]` -
+        three tokens regardless of input, which is silent rather than fatal.
+        This mirrors what `antiberty`'s own runner does before tokenizing.
+
+        Masks are emitted as the vocabulary's `[MASK]`; the class-level
+        `mask_token` ("_") is only the single-character stand-in used inside the
+        unformatted string, and is itself absent from the vocabulary.
+
+        Args:
+            sequences: Sequences to format.
+
+        Returns:
+            One whitespace-separated residue string per input sequence.
         """
         formatted = []
         for seq in sequences:
-            sequence = seq.heavy_chain or seq.light_chain
-
-            # Convert unified mask token to AntiBERTy mask token
-            sequence = sequence.replace(AntibodySequence.MASK_TOKEN, self.mask_token)
-
-            formatted.append(sequence)
+            # Collapse the multi-character unified mask to the single-character
+            # stand-in first, so one mask maps to exactly one token below.
+            sequence = seq.primary_chain.replace(
+                AntibodySequence.MASK_TOKEN, self.mask_token
+            )
+            residues = [
+                "[MASK]" if residue == self.mask_token else residue
+                for residue in sequence
+            ]
+            formatted.append(" ".join(residues))
 
         return formatted
 
-    def _tokenize(
-        self, formatted_sequences: list[str]
-    ) -> dict[str, torch.Tensor]:
+    def _tokenize(self, formatted_sequences: list[str]) -> dict[str, torch.Tensor]:
         """Tokenize formatted sequences using AntiBERTy tokenizer."""
         encoded = self._tokenizer(
             formatted_sequences,
@@ -183,11 +220,44 @@ class AntiBERTy(EncoderAbLM):
         with torch.no_grad():
             outputs = self._model(**tokenized)
 
-        # AntiBERTy returns logits directly
-        logits = outputs.logits if hasattr(outputs, "logits") else outputs[0]
+        logits = self._mlm_logits(outputs)
         attention_mask = tokenized.get("attention_mask")
 
         return logits, attention_mask
+
+    @staticmethod
+    def _mlm_logits(outputs: object) -> torch.Tensor:
+        """
+        Extract MLM logits from an AntiBERTy forward pass.
+
+        AntiBERTy returns an `AntiBERTyOutput`, which names its masked-LM head
+        `prediction_logits` rather than the `logits` most HuggingFace heads use -
+        it carries three further heads (species, chain, graft) alongside it.
+
+        Indexing the output positionally is not a workaround: `AntiBERTyOutput`
+        sets `loss` to the integer `0`, not `None`, when no labels are supplied,
+        so `outputs[0]` returns that `0` and the failure surfaces later as
+        `'int' object is not subscriptable`.
+
+        Args:
+            outputs: The model's return value.
+
+        Returns:
+            Logits of shape `(batch, tokens, vocab)`.
+
+        Raises:
+            AttributeError: If neither field is present, which would mean the
+                upstream output type changed again.
+        """
+        for field in ("prediction_logits", "logits"):
+            logits = getattr(outputs, field, None)
+            if logits is not None:
+                return logits
+        raise AttributeError(
+            "AntiBERTy output exposes neither `prediction_logits` nor `logits`; "
+            f"got fields {sorted(vars(outputs))}. The upstream output type has "
+            "changed."
+        )
 
     def _get_vocab(self) -> dict[str, int]:
         """Get the vocabulary mapping."""
@@ -199,7 +269,9 @@ class AntiBERTy(EncoderAbLM):
         tokens = self._tokenizer.encode(formatted, add_special_tokens=True)
 
         total_ll = 0.0
-        mask_token_id = self._tokenizer.convert_tokens_to_ids(self.mask_token)
+        # `self.mask_token` ("_") is not in AntiBERTy's vocabulary; the
+        # tokenizer's own `[MASK]` id is the correct one.
+        mask_token_id = self._tokenizer.mask_token_id
 
         for i in range(1, len(tokens) - 1):
             masked_tokens = tokens.copy()
@@ -208,12 +280,14 @@ class AntiBERTy(EncoderAbLM):
 
             inputs = {
                 "input_ids": torch.tensor([masked_tokens], device=self._primary_device),
-                "attention_mask": torch.ones(1, len(masked_tokens), device=self._primary_device),
+                "attention_mask": torch.ones(
+                    1, len(masked_tokens), device=self._primary_device
+                ),
             }
 
             with torch.no_grad():
                 outputs = self._model(**inputs)
-                logits = outputs.logits[0, i] if hasattr(outputs, "logits") else outputs[0][0, i]
+                logits = self._mlm_logits(outputs)[0, i]
                 log_probs = F.log_softmax(logits, dim=-1)
                 total_ll += log_probs[original_token].item()
 
@@ -226,7 +300,9 @@ class AntiBERTy(EncoderAbLM):
     ) -> list[list[AntibodySequence]]:
         """Fill masks for a batch of sequences."""
         results = []
-        mask_token_id = self._tokenizer.convert_tokens_to_ids(self.mask_token)
+        # `self.mask_token` ("_") is not in AntiBERTy's vocabulary; the
+        # tokenizer's own `[MASK]` id is the correct one.
+        mask_token_id = self._tokenizer.mask_token_id
 
         for seq in sequences:
             formatted = self._format_for_model([seq])[0]
@@ -234,7 +310,7 @@ class AntiBERTy(EncoderAbLM):
 
             with torch.no_grad():
                 outputs = self._model(**tokenized)
-                logits = outputs.logits[0] if hasattr(outputs, "logits") else outputs[0][0]
+                logits = self._mlm_logits(outputs)[0]
 
             input_ids = tokenized["input_ids"][0]
             mask_positions = (input_ids == mask_token_id).nonzero(as_tuple=True)[0]
@@ -249,7 +325,6 @@ class AntiBERTy(EncoderAbLM):
                 _, top_k_indices = torch.topk(logits[pos], top_k)
 
                 for idx in top_k_indices:
-                    token = self._tokenizer.decode([idx.item()]).strip()
                     filled_ids = input_ids.clone()
                     filled_ids[pos] = idx
                     filled_seq = self._decode_to_sequence(seq, filled_ids)
@@ -298,7 +373,9 @@ class AntiBERTy(EncoderAbLM):
     ) -> list[MaskScanOutput]:
         """Scan each position by masking it and collecting predictions."""
         results = []
-        mask_token_id = self._tokenizer.convert_tokens_to_ids(self.mask_token)
+        # `self.mask_token` ("_") is not in AntiBERTy's vocabulary; the
+        # tokenizer's own `[MASK]` id is the correct one.
+        mask_token_id = self._tokenizer.mask_token_id
 
         for seq in sequences:
             formatted = self._format_for_model([seq])[0]
@@ -307,14 +384,18 @@ class AntiBERTy(EncoderAbLM):
             seq_len = len(tokens)
             vocab_size = self._model.config.vocab_size
             logits = torch.zeros(seq_len, vocab_size, device=self._primary_device)
-            valid_mask = torch.zeros(seq_len, dtype=torch.bool, device=self._primary_device)
+            valid_mask = torch.zeros(
+                seq_len, dtype=torch.bool, device=self._primary_device
+            )
 
             # Build list of positions to mask (skip [CLS] and [SEP])
             positions_to_mask = list(range(1, seq_len - 1))
 
             # Process masked variants in batches
             for batch_start in range(0, len(positions_to_mask), batch_size):
-                batch_positions = positions_to_mask[batch_start:batch_start + batch_size]
+                batch_positions = positions_to_mask[
+                    batch_start : batch_start + batch_size
+                ]
                 current_batch_size = len(batch_positions)
 
                 # Create masked variants for this batch
@@ -332,8 +413,10 @@ class AntiBERTy(EncoderAbLM):
 
                 # Single batched forward pass
                 with torch.no_grad():
-                    outputs = self._model(input_ids=input_ids, attention_mask=attention_mask)
-                    output_logits = outputs.logits if hasattr(outputs, "logits") else outputs[0]
+                    outputs = self._model(
+                        input_ids=input_ids, attention_mask=attention_mask
+                    )
+                    output_logits = self._mlm_logits(outputs)
 
                 # Extract logits for each masked position
                 for batch_idx, pos in enumerate(batch_positions):
@@ -341,7 +424,9 @@ class AntiBERTy(EncoderAbLM):
                     valid_mask[pos] = True
 
             # Compute token offsets for this single sequence
-            tokenized = {"input_ids": torch.tensor([tokens], device=self._primary_device)}
+            tokenized = {
+                "input_ids": torch.tensor([tokens], device=self._primary_device)
+            }
             offsets = self._compute_token_offsets([seq], tokenized)[0]
 
             results.append(

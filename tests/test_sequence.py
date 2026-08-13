@@ -206,3 +206,17 @@ class TestChainTypeEnum:
         assert ChainType.HEAVY.value == "heavy"
         assert ChainType.LIGHT.value == "light"
         assert ChainType.UNKNOWN.value == "unknown"
+
+
+class TestPrimaryChain:
+    def test_returns_heavy_when_only_heavy(self):
+        seq = AntibodySequence(heavy="EVQLVESGGG")
+        assert seq.primary_chain == "EVQLVESGGG"
+
+    def test_returns_light_when_only_light(self):
+        seq = AntibodySequence(light="DIQMTQSPSS")
+        assert seq.primary_chain == "DIQMTQSPSS"
+
+    def test_prefers_heavy_when_paired(self):
+        seq = AntibodySequence(heavy="EVQLVESGGG", light="DIQMTQSPSS")
+        assert seq.primary_chain == "EVQLVESGGG"

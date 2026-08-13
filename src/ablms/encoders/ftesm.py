@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -62,13 +63,14 @@ class FtESM(EncoderAbLM):
     def _load_model(self) -> None:
         """Load the model and tokenizer from HuggingFace."""
         self._tokenizer = AutoTokenizer.from_pretrained(self.MODEL_ID)
-        self._model = EsmForMaskedLM.from_pretrained(self.MODEL_ID)
-        self._model = self._model.to(self._primary_device)
-        self._model.eval()
+        # `Any`: transformers wraps `.to()` in a decorator that static analysis
+        # reads as an unbound method.
+        model: Any = EsmForMaskedLM.from_pretrained(self.MODEL_ID)
+        model.to(self._primary_device)
+        model.eval()
+        self._model = model
 
-    def _format_for_model(
-        self, sequences: list[AntibodySequence]
-    ) -> list[str]:
+    def _format_for_model(self, sequences: list[AntibodySequence]) -> list[str]:
         """
         Format sequences for ft-ESM tokenization.
 
@@ -97,9 +99,7 @@ class FtESM(EncoderAbLM):
 
         return formatted
 
-    def _tokenize(
-        self, formatted_sequences: list[str]
-    ) -> dict[str, torch.Tensor]:
+    def _tokenize(self, formatted_sequences: list[str]) -> dict[str, torch.Tensor]:
         """Tokenize formatted sequences."""
         encoded = self._tokenizer(
             formatted_sequences,
@@ -145,7 +145,10 @@ class FtESM(EncoderAbLM):
                 heavy_len = seq.length.get("heavy", 0)
                 if separator_start is not None:
                     # Heavy chain ends at the first CLS of the separator
-                    seq_offsets["heavy"] = (start, min(separator_start, start + heavy_len))
+                    seq_offsets["heavy"] = (
+                        start,
+                        min(separator_start, start + heavy_len),
+                    )
                 else:
                     # Single chain - ends at calculated length
                     seq_offsets["heavy"] = (start, start + heavy_len)
@@ -251,7 +254,9 @@ class FtESM(EncoderAbLM):
 
             inputs = {
                 "input_ids": torch.tensor([masked_tokens], device=self._primary_device),
-                "attention_mask": torch.ones(1, len(masked_tokens), device=self._primary_device),
+                "attention_mask": torch.ones(
+                    1, len(masked_tokens), device=self._primary_device
+                ),
             }
 
             with torch.no_grad():
@@ -326,7 +331,11 @@ class FtESM(EncoderAbLM):
 
         # Remove special tokens and parse
         # ESM uses <cls> at start and <eos> at end
-        decoded = decoded.replace("<cls>", " <cls> ").replace("<eos>", "").replace("<pad>", "")
+        decoded = (
+            decoded.replace("<cls>", " <cls> ")
+            .replace("<eos>", "")
+            .replace("<pad>", "")
+        )
         decoded = decoded.strip()
 
         # Split by the <cls><cls> separator (which will appear as " <cls>  <cls> " after our replace)
@@ -389,7 +398,9 @@ class FtESM(EncoderAbLM):
             seq_len = len(tokens)
             vocab_size = self._model.config.vocab_size
             logits = torch.zeros(seq_len, vocab_size, device=self._primary_device)
-            valid_mask = torch.zeros(seq_len, dtype=torch.bool, device=self._primary_device)
+            valid_mask = torch.zeros(
+                seq_len, dtype=torch.bool, device=self._primary_device
+            )
 
             # Build list of positions to mask (skip special tokens)
             positions_to_mask = []
@@ -400,7 +411,9 @@ class FtESM(EncoderAbLM):
 
             # Process masked variants in batches
             for batch_start in range(0, len(positions_to_mask), batch_size):
-                batch_positions = positions_to_mask[batch_start:batch_start + batch_size]
+                batch_positions = positions_to_mask[
+                    batch_start : batch_start + batch_size
+                ]
                 current_batch_size = len(batch_positions)
 
                 # Create masked variants for this batch
@@ -418,7 +431,9 @@ class FtESM(EncoderAbLM):
 
                 # Single batched forward pass
                 with torch.no_grad():
-                    outputs = self._model(input_ids=input_ids, attention_mask=attention_mask)
+                    outputs = self._model(
+                        input_ids=input_ids, attention_mask=attention_mask
+                    )
 
                 # Extract logits for each masked position
                 for batch_idx, pos in enumerate(batch_positions):
@@ -426,7 +441,9 @@ class FtESM(EncoderAbLM):
                     valid_mask[pos] = True
 
             # Compute token offsets for this single sequence
-            tokenized = {"input_ids": torch.tensor([tokens], device=self._primary_device)}
+            tokenized = {
+                "input_ids": torch.tensor([tokens], device=self._primary_device)
+            }
             offsets = self._compute_token_offsets([seq], tokenized)[0]
 
             results.append(
