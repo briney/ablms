@@ -24,7 +24,7 @@ import pytest
 import torch
 
 import ablms
-from ablms.core.sequence import ChainType, Species
+from ablms.core.sequence import AntibodySequence, ChainType, Species
 
 pytestmark = [pytest.mark.smoke, pytest.mark.slow]
 
@@ -37,6 +37,9 @@ AMINO_ACIDS = set("ACDEFGHIKLMNPQRSTVWY")
 # so identical embeddings prove the tokenizer is broken.
 VH_A = "EVQLVESGGGLVQPGRSLRLSCAAS"
 VH_B = "QVQLVQSGAEVKKPGASVKVSCKAS"
+
+# AntiBERTy's vocabulary: the 20 amino acids plus [PAD] [UNK] [CLS] [SEP] [MASK].
+ANTIBERTY_VOCAB_SIZE = 25
 
 
 def test_iglm_generates_a_plausible_sequence():
@@ -102,3 +105,65 @@ def test_antiberty_embeds_a_single_sequence():
     assert not torch.allclose(
         per_position[0], per_position[1]
     ), "all positions identical - residues are not being distinguished"
+
+
+def test_antiberty_logits_form_a_distribution_over_the_vocabulary():
+    """AntiBERTy's MLM head should yield real logits, one row per token.
+
+    AntiBERTy names its MLM output `prediction_logits`, not the `logits` most
+    HuggingFace heads use, and its `loss` field defaults to the integer 0 rather
+    than None - so a positional fallback to `outputs[0]` silently returns that 0.
+    """
+    model = ablms.load_model("antiberty")
+    output = model.get_logits([VH_A])
+
+    # One row per token: the residues plus [CLS] and [SEP].
+    assert output.logits.shape[0] == 1
+    assert output.logits.shape[1] == len(VH_A) + 2
+    assert output.logits.shape[-1] == ANTIBERTY_VOCAB_SIZE
+    assert torch.isfinite(output.logits).all()
+
+    probabilities = output.probabilities[0]
+    row_sums = probabilities.sum(dim=-1)
+    assert torch.allclose(
+        row_sums, torch.ones_like(row_sums), atol=1e-4
+    ), f"probabilities do not sum to 1: {row_sums[:5].tolist()}"
+
+
+def test_antiberty_fills_a_mask_with_an_amino_acid():
+    """A masked position should be filled with a real residue."""
+    model = ablms.load_model("antiberty")
+    masked = AntibodySequence(heavy="EVQLVESGGG<MASK>VQPGRSLRLSCAAS")
+
+    filled = model.fill_mask([masked], top_k=3)
+
+    assert len(filled) == 1
+    predictions = filled[0]
+    assert len(predictions) == 3, f"expected 3 candidates, got {len(predictions)}"
+    for candidate in predictions:
+        sequence = candidate.heavy_chain
+        assert len(sequence) == len("EVQLVESGGGXVQPGRSLRLSCAAS")
+        unexpected = set(sequence) - AMINO_ACIDS
+        assert not unexpected, f"non-amino-acid characters {unexpected} in {sequence!r}"
+
+
+def test_antiberty_prefers_a_real_antibody_to_poly_alanine():
+    """Pseudo-log-likelihood must rank a real VH above a degenerate sequence.
+
+    This is the assertion that distinguishes a working MLM head from one
+    returning arbitrary numbers: a model trained on antibodies should find a
+    genuine framework far more probable than a run of alanines of equal length.
+    """
+    model = ablms.load_model("antiberty")
+    real, poly_alanine = VH_A, "A" * len(VH_A)
+
+    scores = model.pseudo_log_likelihood([real, poly_alanine])
+
+    assert len(scores) == 2
+    real_score, degenerate_score = scores
+    assert real_score == real_score, "score is NaN"
+    assert real_score < 0, f"a summed log-probability must be negative: {real_score}"
+    assert real_score > degenerate_score, (
+        f"real VH scored {real_score:.2f} but poly-alanine scored "
+        f"{degenerate_score:.2f}; the MLM head is not discriminating"
+    )

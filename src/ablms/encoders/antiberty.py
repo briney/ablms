@@ -220,11 +220,44 @@ class AntiBERTy(EncoderAbLM):
         with torch.no_grad():
             outputs = self._model(**tokenized)
 
-        # AntiBERTy returns logits directly
-        logits = outputs.logits if hasattr(outputs, "logits") else outputs[0]
+        logits = self._mlm_logits(outputs)
         attention_mask = tokenized.get("attention_mask")
 
         return logits, attention_mask
+
+    @staticmethod
+    def _mlm_logits(outputs: object) -> torch.Tensor:
+        """
+        Extract MLM logits from an AntiBERTy forward pass.
+
+        AntiBERTy returns an `AntiBERTyOutput`, which names its masked-LM head
+        `prediction_logits` rather than the `logits` most HuggingFace heads use -
+        it carries three further heads (species, chain, graft) alongside it.
+
+        Indexing the output positionally is not a workaround: `AntiBERTyOutput`
+        sets `loss` to the integer `0`, not `None`, when no labels are supplied,
+        so `outputs[0]` returns that `0` and the failure surfaces later as
+        `'int' object is not subscriptable`.
+
+        Args:
+            outputs: The model's return value.
+
+        Returns:
+            Logits of shape `(batch, tokens, vocab)`.
+
+        Raises:
+            AttributeError: If neither field is present, which would mean the
+                upstream output type changed again.
+        """
+        for field in ("prediction_logits", "logits"):
+            logits = getattr(outputs, field, None)
+            if logits is not None:
+                return logits
+        raise AttributeError(
+            "AntiBERTy output exposes neither `prediction_logits` nor `logits`; "
+            f"got fields {sorted(vars(outputs))}. The upstream output type has "
+            "changed."
+        )
 
     def _get_vocab(self) -> dict[str, int]:
         """Get the vocabulary mapping."""
@@ -254,11 +287,7 @@ class AntiBERTy(EncoderAbLM):
 
             with torch.no_grad():
                 outputs = self._model(**inputs)
-                logits = (
-                    outputs.logits[0, i]
-                    if hasattr(outputs, "logits")
-                    else outputs[0][0, i]
-                )
+                logits = self._mlm_logits(outputs)[0, i]
                 log_probs = F.log_softmax(logits, dim=-1)
                 total_ll += log_probs[original_token].item()
 
@@ -281,9 +310,7 @@ class AntiBERTy(EncoderAbLM):
 
             with torch.no_grad():
                 outputs = self._model(**tokenized)
-                logits = (
-                    outputs.logits[0] if hasattr(outputs, "logits") else outputs[0][0]
-                )
+                logits = self._mlm_logits(outputs)[0]
 
             input_ids = tokenized["input_ids"][0]
             mask_positions = (input_ids == mask_token_id).nonzero(as_tuple=True)[0]
@@ -389,9 +416,7 @@ class AntiBERTy(EncoderAbLM):
                     outputs = self._model(
                         input_ids=input_ids, attention_mask=attention_mask
                     )
-                    output_logits = (
-                        outputs.logits if hasattr(outputs, "logits") else outputs[0]
-                    )
+                    output_logits = self._mlm_logits(outputs)
 
                 # Extract logits for each masked position
                 for batch_idx, pos in enumerate(batch_positions):
