@@ -7,6 +7,7 @@ import torch
 from ablms.core.generative import GenerativeAbLM
 from ablms.core.sequence import AntibodySequence, ChainType, Species
 from ablms.exceptions import ModelLoadError, UnsupportedOperationError
+from ablms.utils.compat import repair_bert_tokenizer
 
 # Mapping from our Species enum to IgLM species control tokens. These are fed
 # to IgLM's tokenizer, which asserts that every token is in its vocabulary.
@@ -83,6 +84,20 @@ class IgLM(GenerativeAbLM):
             ) from e
 
         self._iglm = IgLMModel()
+
+        # IgLM builds its tokenizer with the transformers 4 keyword, which 5.x
+        # silently ignores - leaving every control token as `[UNK]`. Repair it
+        # before anything tokenizes. No-op once upstream fixes this; see
+        # ablms.utils.compat and issue #5.
+        from iglm.model.IgLM import VOCAB_FILE
+
+        self._iglm.tokenizer = repair_bert_tokenizer(
+            self._iglm.tokenizer,
+            vocab_file=VOCAB_FILE,
+            probe_tokens=list(CHAIN_TYPE_MAP.values()) + list(SPECIES_MAP.values()),
+            do_lower_case=False,
+        )
+
         # Move model to device if possible
         if hasattr(self._iglm, "model"):
             self._iglm.model = self._iglm.model.to(self._primary_device)

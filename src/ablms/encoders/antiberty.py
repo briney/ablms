@@ -9,6 +9,7 @@ from ablms.core.encoder import EncoderAbLM
 from ablms.core.sequence import AntibodySequence
 from ablms.exceptions import ModelLoadError
 from ablms.outputs import MaskScanOutput
+from ablms.utils.compat import ensure_post_init_called, repair_bert_tokenizer
 
 
 class AntiBERTy(EncoderAbLM):
@@ -62,7 +63,30 @@ class AntiBERTy(EncoderAbLM):
                 "Install it with: pip install antiberty"
             ) from e
 
+        # AntiBERTy has two transformers 5.x incompatibilities, both upstream.
+        # The first must be repaired before construction, because it raises
+        # inside `from_pretrained`: its model class calls the pre-4.6
+        # `init_weights()` instead of `post_init()`, and only `post_init()`
+        # populates `all_tied_weights_keys`. See ablms.utils.compat, issue #5.
+        from antiberty.AntiBERTyRunner import VOCAB_FILE
+        from antiberty.model.AntiBERTy import AntiBERTy
+
+        ensure_post_init_called(AntiBERTy)
+
         self._runner = AntiBERTyRunner()
+
+        # The second is silent: the runner builds its tokenizer with the
+        # transformers 4 `vocab_file=` keyword, which 5.x ignores, collapsing
+        # every residue to `[UNK]`. Left alone this still returns correctly
+        # shaped embeddings, which is why it went unnoticed - the values are
+        # simply meaningless.
+        self._runner.tokenizer = repair_bert_tokenizer(
+            self._runner.tokenizer,
+            vocab_file=VOCAB_FILE,
+            probe_tokens=["E", "V", "Q", "G"],
+            do_lower_case=False,
+        )
+
         # Move model to device
         self._runner.model = self._runner.model.to(self._primary_device)
         self._runner.model.eval()
@@ -71,18 +95,36 @@ class AntiBERTy(EncoderAbLM):
 
     def _format_for_model(self, sequences: list[AntibodySequence]) -> list[str]:
         """
-        Format sequences for AntiBERTy.
+        Format sequences for AntiBERTy as whitespace-separated residues.
 
-        AntiBERTy uses "_" as the mask token and expects raw sequences.
+        AntiBERTy's vocabulary is per-residue, and its tokenizer is a WordPiece
+        model, so residues must be whitespace-delimited. An unspaced sequence is
+        treated as a single unknown word and collapses to `[CLS] [UNK] [SEP]` -
+        three tokens regardless of input, which is silent rather than fatal.
+        This mirrors what `antiberty`'s own runner does before tokenizing.
+
+        Masks are emitted as the vocabulary's `[MASK]`; the class-level
+        `mask_token` ("_") is only the single-character stand-in used inside the
+        unformatted string, and is itself absent from the vocabulary.
+
+        Args:
+            sequences: Sequences to format.
+
+        Returns:
+            One whitespace-separated residue string per input sequence.
         """
         formatted = []
         for seq in sequences:
-            sequence = seq.primary_chain
-
-            # Convert unified mask token to AntiBERTy mask token
-            sequence = sequence.replace(AntibodySequence.MASK_TOKEN, self.mask_token)
-
-            formatted.append(sequence)
+            # Collapse the multi-character unified mask to the single-character
+            # stand-in first, so one mask maps to exactly one token below.
+            sequence = seq.primary_chain.replace(
+                AntibodySequence.MASK_TOKEN, self.mask_token
+            )
+            residues = [
+                "[MASK]" if residue == self.mask_token else residue
+                for residue in sequence
+            ]
+            formatted.append(" ".join(residues))
 
         return formatted
 
@@ -194,7 +236,9 @@ class AntiBERTy(EncoderAbLM):
         tokens = self._tokenizer.encode(formatted, add_special_tokens=True)
 
         total_ll = 0.0
-        mask_token_id = self._tokenizer.convert_tokens_to_ids(self.mask_token)
+        # `self.mask_token` ("_") is not in AntiBERTy's vocabulary; the
+        # tokenizer's own `[MASK]` id is the correct one.
+        mask_token_id = self._tokenizer.mask_token_id
 
         for i in range(1, len(tokens) - 1):
             masked_tokens = tokens.copy()
@@ -227,7 +271,9 @@ class AntiBERTy(EncoderAbLM):
     ) -> list[list[AntibodySequence]]:
         """Fill masks for a batch of sequences."""
         results = []
-        mask_token_id = self._tokenizer.convert_tokens_to_ids(self.mask_token)
+        # `self.mask_token` ("_") is not in AntiBERTy's vocabulary; the
+        # tokenizer's own `[MASK]` id is the correct one.
+        mask_token_id = self._tokenizer.mask_token_id
 
         for seq in sequences:
             formatted = self._format_for_model([seq])[0]
@@ -300,7 +346,9 @@ class AntiBERTy(EncoderAbLM):
     ) -> list[MaskScanOutput]:
         """Scan each position by masking it and collecting predictions."""
         results = []
-        mask_token_id = self._tokenizer.convert_tokens_to_ids(self.mask_token)
+        # `self.mask_token` ("_") is not in AntiBERTy's vocabulary; the
+        # tokenizer's own `[MASK]` id is the correct one.
+        mask_token_id = self._tokenizer.mask_token_id
 
         for seq in sequences:
             formatted = self._format_for_model([seq])[0]
