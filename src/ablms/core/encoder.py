@@ -4,8 +4,11 @@ from __future__ import annotations
 
 from abc import abstractmethod
 from collections.abc import Iterator
+from pathlib import Path
 
+import numpy as np
 import torch
+from numpy.lib.format import open_memmap
 
 from ablms.core.base import BaseAbLM
 from ablms.core.sequence import AntibodySequence
@@ -372,6 +375,126 @@ class EncoderAbLM(BaseAbLM):
                 layer=single_layer,
                 layers=layers,
             )
+
+    def write_embeddings(
+        self,
+        sequences: str | AntibodySequence | list[str] | list[AntibodySequence],
+        path: str | Path,
+        layer: LayerSelection = -1,
+        pooling: str = "mean",
+        batch_size: int = 32,
+        dtype: str | np.dtype = "float32",
+        show_progress: bool = True,
+    ) -> np.memmap:
+        """
+        Write embeddings to a .npy file one batch at a time.
+
+        Memory stays flat at roughly one batch: each batch is copied into a
+        memory-mapped region on disk and released, so the full array is never
+        resident. This is the option for datasets whose embeddings do not fit
+        in RAM - `get_embeddings()` holds the whole result, and `layer="all"`
+        multiplies it by the model's depth.
+
+        The file is allocated when the first batch arrives rather than up
+        front, because its trailing dimensions depend on the model's hidden
+        size and, for `layer="all"`, on its depth.
+
+        Args:
+            sequences: Input sequences in various formats.
+            path: Destination .npy path. Overwritten if it exists.
+            layer: Which layer(s) to extract, as in `get_embeddings()`. A list
+                or "all" adds a layer axis at dimension 1.
+            pooling: Pooling strategy: "mean", "max", "cls", "first", or
+                "last". Required - see Raises.
+            batch_size: Batch size for processing (per GPU when using multi-GPU).
+            dtype: On-disk dtype. "float16" halves the file, which at dataset
+                scale is usually worth the precision loss for clustering or
+                dimensionality reduction.
+            show_progress: Whether to show a progress bar.
+
+        Returns:
+            A read-only memmap of the written file, shaped
+            [n_sequences, hidden_dim], with a layer axis at dimension 1 when
+            several layers were selected. Reading it does not load the file
+            into memory; slice it to pull rows in.
+
+        Raises:
+            ValueError: If `pooling` is None, if `sequences` is empty, or if
+                the run produced a different number of rows than there were
+                input sequences.
+            PairedSequenceError: If paired sequences are provided but the model
+                does not support them.
+            SequenceTooLongError: If a sequence exceeds the model's max length.
+
+        Note:
+            Token-level output has a per-batch sequence length, so it is ragged
+            across batches and has no single dense .npy form. Use
+            `iter_embeddings()` with HDF5 or zarr for that.
+
+        Example:
+            >>> emb = model.write_embeddings(
+            ...     seqs, "embeddings.npy", layer="all", pooling="mean",
+            ...     dtype="float16",
+            ... )
+            >>> emb.shape  # (n_sequences, n_layers, hidden_dim)
+            >>> features = np.asarray(emb).reshape(len(emb), -1)  # concat_layers()
+        """
+        if pooling is None:
+            raise ValueError(
+                "write_embeddings() requires pooling: token-level output has a "
+                "per-batch sequence length, so it is ragged across batches and "
+                "has no single dense .npy form. Pass a pooling strategy, or use "
+                "iter_embeddings() with HDF5/zarr for token-level output."
+            )
+
+        path = Path(path)
+        sequences = self._normalize_input(sequences)
+        if len(sequences) == 0:
+            raise ValueError("No sequences to write.")
+
+        np_dtype = np.dtype(dtype)
+        writer: np.memmap | None = None
+        written = 0
+
+        for output in self.iter_embeddings(
+            sequences,
+            layer=layer,
+            pooling=pooling,
+            batch_size=batch_size,
+            show_progress=show_progress,
+        ):
+            # float32 first: .numpy() has no bfloat16 equivalent, and a model
+            # running in reduced precision returns whatever it computed in.
+            block = output.embeddings.detach().to(torch.float32).numpy()
+            block = block.astype(np_dtype, copy=False)
+
+            if writer is None:
+                writer = open_memmap(
+                    path,
+                    mode="w+",
+                    dtype=np_dtype,
+                    shape=(len(sequences), *block.shape[1:]),
+                )
+
+            writer[written : written + block.shape[0]] = block
+            written += block.shape[0]
+
+        if writer is None:
+            raise ValueError(
+                f"No batches were produced for {len(sequences)} sequences."
+            )
+
+        # Flush and drop the writable mapping before handing back a read-only one.
+        writer.flush()
+        del writer
+
+        if written != len(sequences):
+            raise ValueError(
+                f"Wrote {written} rows but expected {len(sequences)}. The file "
+                f"at {path} is incomplete."
+            )
+
+        return np.load(path, mmap_mode="r")
 
     def get_hidden_states(
         self,

@@ -450,3 +450,120 @@ class TestGetHiddenStates:
     @pytest.mark.slow
     def test_empty_input_returns_empty_list(self, esm2_cpu):
         assert esm2_cpu.get_hidden_states([]) == []
+
+
+class TestWriteEmbeddings:
+    """write_embeddings streams to a .npy file without accumulating in RAM.
+
+    The file is allocated from the first batch's shape rather than up front,
+    because the trailing dimensions depend on the model's hidden size and, for
+    layer="all", on its depth.
+    """
+
+    @pytest.mark.slow
+    def test_writes_pooled_single_layer(self, esm2_cpu, sequences, tmp_path):
+        path = tmp_path / "emb.npy"
+
+        written = esm2_cpu.write_embeddings(
+            sequences, path, pooling="mean", batch_size=2, show_progress=False
+        )
+
+        assert path.exists()
+        assert written.shape == (len(sequences), esm2_cpu.embedding_dim)
+
+    @pytest.mark.slow
+    def test_values_match_get_embeddings(self, esm2_cpu, sequences, tmp_path):
+        """Streaming to disk must not change the numbers."""
+        import numpy as np
+
+        written = esm2_cpu.write_embeddings(
+            sequences,
+            tmp_path / "emb.npy",
+            pooling="mean",
+            batch_size=2,
+            show_progress=False,
+        )
+        direct = esm2_cpu.get_embeddings(
+            sequences, pooling="mean", batch_size=2, show_progress=False
+        )
+
+        assert np.allclose(np.asarray(written), direct.embeddings.numpy(), atol=1e-6)
+
+    @pytest.mark.slow
+    def test_layer_all_adds_a_layer_axis(self, esm2_cpu, sequences, tmp_path):
+        import numpy as np
+
+        written = esm2_cpu.write_embeddings(
+            sequences,
+            tmp_path / "emb.npy",
+            layer="all",
+            pooling="mean",
+            batch_size=2,
+            show_progress=False,
+        )
+        direct = esm2_cpu.get_embeddings(
+            sequences, layer="all", pooling="mean", batch_size=2, show_progress=False
+        )
+
+        assert written.shape == (
+            len(sequences),
+            esm2_cpu.num_layers + 1,
+            esm2_cpu.embedding_dim,
+        )
+        assert np.allclose(np.asarray(written), direct.embeddings.numpy(), atol=1e-6)
+
+    @pytest.mark.slow
+    def test_ragged_final_batch_is_written(self, esm2_cpu, sequences, tmp_path):
+        """5 sequences at batch_size 2 leaves a final batch of 1."""
+        written = esm2_cpu.write_embeddings(
+            sequences,
+            tmp_path / "emb.npy",
+            pooling="mean",
+            batch_size=2,
+            show_progress=False,
+        )
+        assert written.shape[0] == 5
+
+    @pytest.mark.slow
+    def test_dtype_can_be_narrowed(self, esm2_cpu, sequences, tmp_path):
+        """float16 halves the file, which is the point at dataset scale."""
+        import numpy as np
+
+        written = esm2_cpu.write_embeddings(
+            sequences,
+            tmp_path / "emb.npy",
+            pooling="mean",
+            dtype="float16",
+            batch_size=2,
+            show_progress=False,
+        )
+        assert written.dtype == np.float16
+
+    @pytest.mark.slow
+    def test_token_level_is_rejected(self, esm2_cpu, sequences, tmp_path):
+        """Token-level output is ragged across batches and has no dense .npy form."""
+        with pytest.raises(ValueError, match="pooling"):
+            esm2_cpu.write_embeddings(
+                sequences, tmp_path / "emb.npy", pooling=None, show_progress=False
+            )
+
+    @pytest.mark.slow
+    def test_empty_input_is_rejected(self, esm2_cpu, tmp_path):
+        with pytest.raises(ValueError, match="[Nn]o sequences"):
+            esm2_cpu.write_embeddings(
+                [], tmp_path / "emb.npy", pooling="mean", show_progress=False
+            )
+
+    @pytest.mark.slow
+    def test_result_is_memory_mapped_not_resident(self, esm2_cpu, sequences, tmp_path):
+        """The return value must be a lazy handle, not the array in RAM."""
+        import numpy as np
+
+        written = esm2_cpu.write_embeddings(
+            sequences,
+            tmp_path / "emb.npy",
+            pooling="mean",
+            batch_size=2,
+            show_progress=False,
+        )
+        assert isinstance(written, np.memmap)

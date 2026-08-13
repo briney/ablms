@@ -106,8 +106,25 @@ override becomes a `TypeError` at inference time rather than at import time.
   (pooling, scoring) belongs inside the batch method, before `.cpu()`, not after the
   executor concatenates. See `EncoderAbLM._process_embeddings_batch`.
 - **Streaming variants**: `MultiGPUExecutor.execute_iter()` yields `(batch_index, result)`
-  in input order with a bounded submission window; `execute()` is a thin wrapper that
-  combines it. Public streaming APIs (e.g. `iter_embeddings()`) build on `execute_iter`.
+  in input order with a bounded submission window; `execute()` consumes it. Public
+  streaming APIs (`iter_embeddings()`, `write_embeddings()`) build on `execute_iter`.
+- **Combine as batches arrive, not after**: `execute()` feeds each batch into a
+  `_ResultAccumulator` that writes into a buffer preallocated for the whole run, rather
+  than collecting batches and calling `torch.cat`. This is not a micro-optimization: a
+  freed batch goes to the allocator's free list, not back to the OS, so only a *later*
+  allocation can reuse it. A buffer allocated after the batches (as `torch.cat` does)
+  cannot, and the peak becomes 2x the result — arriving *after* the progress bar
+  completes, which is where large runs die. Batches whose trailing shape varies
+  (token-level output) cannot stream into a fixed buffer and fall back to collect-then-pad
+  in `_concat_batches`; that is acceptable because those batches are large enough to be
+  mapped individually and so do return to the OS when freed. `_TensorColumn` is where the
+  streaming/fallback decision lives.
+- **Writing embeddings to disk**: `write_embeddings()` streams to a `.npy` via
+  `numpy.lib.format.open_memmap`, allocating the file from the first batch's shape (the
+  trailing dims depend on the model's hidden size and, for `layer="all"`, its depth). It
+  requires pooling: token-level output is ragged across batches and has no dense `.npy`
+  form. `.npz` and `safetensors` are not options — both need every array up front, so
+  neither can be appended to.
 - **Layer selection**: `get_embeddings(layer=...)` accepts an int, a list of ints, or
   `"all"`. `utils/layers.py::resolve_layer_selection` validates and resolves it in the
   parent before dispatch; a list return means the batch method stacks a layer axis at

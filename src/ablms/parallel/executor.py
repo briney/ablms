@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import queue
+from collections import deque
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
@@ -57,6 +58,136 @@ def _detach_from_shm(obj: Any) -> Any:
             },
         )
     return obj
+
+
+class _TensorColumn:
+    """
+    One tuple position whose per-batch value is a [batch, ...] tensor.
+
+    Batches are written straight into a buffer sized for the whole run, so the
+    result is never held twice. Allocating that buffer up front - before any
+    batch exists - is what makes the memory bounded: a freed batch goes back to
+    the allocator's free list rather than to the OS, so it can only be reused by
+    a *later* allocation. A buffer allocated afterwards, as `torch.cat` does,
+    cannot reuse it and the peak is the sum of both.
+
+    Batches whose trailing shape does not match the first one (token-level
+    output, which pads per batch) cannot stream into a fixed buffer. Those fall
+    back to collecting chunks and padding at the end - the original behaviour,
+    and acceptable there because token-level batches are large enough to be
+    mapped individually and so do return to the OS when freed.
+    """
+
+    def __init__(self, total_rows: int, first: torch.Tensor) -> None:
+        self._buffer: torch.Tensor | None = torch.empty(
+            (total_rows, *first.shape[1:]), dtype=first.dtype
+        )
+        self._rows = 0
+        self._chunks: list[torch.Tensor] | None = None
+
+    def add(self, tensor: torch.Tensor) -> None:
+        if self._chunks is None:
+            assert self._buffer is not None
+            rows = tensor.shape[0]
+            fits = (
+                tensor.shape[1:] == self._buffer.shape[1:]
+                and self._rows + rows <= self._buffer.shape[0]
+            )
+            if fits:
+                self._buffer[self._rows : self._rows + rows] = tensor
+                self._rows += rows
+                return
+
+            # Ragged batch, or more rows than there were input sequences. Keep
+            # what is written so far as one chunk and collect the rest, so the
+            # final pad-and-concatenate runs over a few chunks rather than one
+            # per batch. Cloning releases the oversized buffer; the mismatch
+            # almost always shows up on the second batch, so little is copied.
+            self._chunks = [self._buffer[: self._rows].clone()] if self._rows else []
+            self._buffer = None
+
+        self._chunks.append(tensor)
+
+    def finish(self, executor: MultiGPUExecutor) -> torch.Tensor:
+        if self._chunks is None:
+            assert self._buffer is not None
+            return self._buffer[: self._rows]
+        return executor._concat_batches(self._chunks)
+
+
+class _ListColumn:
+    """One tuple position holding a per-batch list of non-tensors (offsets)."""
+
+    def __init__(self) -> None:
+        self._items: list[Any] = []
+
+    def add(self, value: list[Any]) -> None:
+        self._items.extend(value)
+
+    def finish(self, executor: MultiGPUExecutor) -> list[Any]:
+        return self._items
+
+
+class _NoneColumn:
+    """One tuple position that is None in every batch (an absent mask)."""
+
+    def add(self, value: Any) -> None:
+        pass
+
+    def finish(self, executor: MultiGPUExecutor) -> None:
+        return None
+
+
+class _OpaqueColumn:
+    """A position with no streaming form; collected and combined at the end."""
+
+    def __init__(self) -> None:
+        self._values: list[Any] = []
+
+    def add(self, value: Any) -> None:
+        self._values.append(value)
+
+    def finish(self, executor: MultiGPUExecutor) -> Any:
+        return executor._combine_column(self._values)
+
+
+class _ResultAccumulator:
+    """
+    Combines batch results into preallocated storage as they arrive.
+
+    The structure of a result is not known until the first batch lands, so the
+    columns are chosen then and reused for every subsequent batch.
+    """
+
+    def __init__(self, total_rows: int) -> None:
+        self._total_rows = total_rows
+        self._columns: list[Any] | None = None
+        self._is_tuple = False
+
+    def add(self, result: Any) -> None:
+        values = result if isinstance(result, tuple) else (result,)
+        if self._columns is None:
+            self._is_tuple = isinstance(result, tuple)
+            self._columns = [self._make_column(value) for value in values]
+        for column, value in zip(self._columns, values):
+            column.add(value)
+
+    def _make_column(self, value: Any) -> Any:
+        if isinstance(value, torch.Tensor) and value.dim() >= 1:
+            return _TensorColumn(self._total_rows, value)
+        if value is None:
+            return _NoneColumn()
+        if isinstance(value, list) and not (
+            value and isinstance(value[0], torch.Tensor)
+        ):
+            return _ListColumn()
+        return _OpaqueColumn()
+
+    def finish(self, executor: MultiGPUExecutor) -> Any:
+        if self._columns is None:
+            return None
+        combined = [column.finish(executor) for column in self._columns]
+        return tuple(combined) if self._is_tuple else combined[0]
 
 
 class MultiGPUExecutor:
@@ -228,19 +359,28 @@ class MultiGPUExecutor:
 
         Returns:
             Combined results from all workers (type depends on the method).
+
+        Note:
+            Batches are combined as they arrive rather than collected and
+            concatenated at the end. Collecting first means holding every batch
+            while the combined result is built alongside it, which peaks at
+            twice the result - and does so *after* the progress bar has
+            finished, which is where large runs die.
         """
-        results = [
-            result
-            for _, result in self.execute_iter(
-                method_name,
-                sequences,
-                batch_size,
-                show_progress=show_progress,
-                progress_desc=progress_desc,
-                **method_kwargs,
-            )
-        ]
-        return self._combine_results(results)
+        accumulator = _ResultAccumulator(total_rows=len(sequences))
+        for _, result in self.execute_iter(
+            method_name,
+            sequences,
+            batch_size,
+            show_progress=show_progress,
+            progress_desc=progress_desc,
+            **method_kwargs,
+        ):
+            accumulator.add(result)
+            # Release the batch before the next one is produced, so its memory
+            # is available for reuse rather than accumulating.
+            del result
+        return accumulator.finish(self)
 
     def execute_iter(
         self,
@@ -492,137 +632,123 @@ class MultiGPUExecutor:
             f"  - Set ABLMS_DISABLE_MULTI_GPU=true to avoid the queue entirely."
         )
 
-    def _combine_results(self, results: list[Any]) -> Any:
+    def _combine_column(self, elements: list[Any]) -> Any:
         """
-        Combine results from multiple batches.
+        Combine one tuple position's per-batch values into a single result.
 
-        Handles different result types:
-        - Tuple of (embeddings, mask, offsets)
-        - Tuple of (hidden_states_list, mask, offsets)
-        - Tuple of (tensor, mask, offsets)
-        - List results
+        This is the path for values that cannot be streamed into a preallocated
+        buffer as they arrive - chiefly the per-layer list of tensors returned
+        by `_process_hidden_states_batch`. Positions that can stream are handled
+        by `_TensorColumn`, which never reaches here.
 
         Args:
-            results: List of batch results to combine.
+            elements: One value per batch, in input order. Emptied by this call.
 
         Returns:
-            Combined result with tensors concatenated along batch dimension.
+            The combined value: tensors concatenated along the batch axis, lists
+            flattened, None left as None.
         """
-        if not results:
+        if not elements:
             return None
 
-        first = results[0]
+        first = elements[0]
 
-        # Handle tuple results (embeddings, mask, offsets)
-        if isinstance(first, tuple):
-            return self._combine_tuple_results(results)
-
-        # Handle list results
-        if isinstance(first, list):
-            combined = []
-            for r in results:
-                combined.extend(r)
-            return combined
-
-        # Handle tensor results
         if isinstance(first, torch.Tensor):
-            return torch.cat(results, dim=0)
+            return self._concat_batches(elements)
 
-        # Unknown type - return as list
-        return results
+        if isinstance(first, list):
+            if first and isinstance(first[0], torch.Tensor):
+                # List of tensors, one per layer (hidden states).
+                layer_combined = []
+                for layer_idx in range(len(first)):
+                    layer_tensors = [element[layer_idx] for element in elements]
+                    layer_combined.append(self._concat_batches(layer_tensors))
+                elements.clear()
+                return layer_combined
 
-    def _pad_tensors_to_max_length(
-        self, tensors: list[torch.Tensor]
-    ) -> list[torch.Tensor]:
+            flat: list[Any] = []
+            for element in elements:
+                flat.extend(element)
+            elements.clear()
+            return flat
+
+        if first is None:
+            return None
+
+        return elements
+
+    def _concat_batches(self, tensors: list[torch.Tensor]) -> torch.Tensor:
         """
-        Pad tensors so they agree on every axis except the concatenation axis.
+        Concatenate along dim 0 into one preallocated tensor, freeing inputs.
 
-        Batches are tokenized independently, so they pad to different sequence
-        lengths and cannot be concatenated as-is. Rather than assume which axis
-        carries sequence length - dim 1 for [batch, seq, hidden], dim 2 for the
-        multi-layer [batch, layers, seq, hidden] - pad whichever non-batch axes
-        actually differ across the group. Dimension 0 is the concatenation axis
-        and is left alone.
+        `torch.cat` builds its output while every input is still referenced, so
+        peak memory is the sum of both - 2x the result for a run whose batches
+        are all live, which at dataset scale is what kills the process right
+        after the progress bar completes. Writing into a preallocated output and
+        releasing each batch as it is copied keeps roughly one result's worth
+        resident: the output faults in page by page as the inputs are freed.
+
+        The output is allocated with `torch.empty` rather than `torch.zeros`
+        even when padding is needed, because `torch.zeros` memsets the whole
+        buffer up front - making it fully resident while every input is still
+        alive, which is the 2x peak this method exists to avoid. Slices that
+        need padding are zeroed individually, just before they are written.
+
+        Padding is implicit, which is why no separate padding pass is needed.
+        Batches are tokenized independently and so pad to different sequence
+        lengths; copying each into the leading corner of its slice leaves the
+        trailing region of a shorter batch as zero fill. Which axis carries
+        sequence length is never assumed - it is dim 1 for [batch, seq, hidden]
+        but dim 2 for the multi-layer [batch, layers, seq, hidden] - because
+        every non-batch axis is sized to the largest seen and every batch is
+        written at the origin.
 
         Args:
-            tensors: List of tensors to pad. All must have the same rank.
+            tensors: Batch tensors, all of equal rank. Emptied by this call.
 
         Returns:
-            List of tensors that differ only along dimension 0.
+            One tensor holding every batch, padded on non-batch axes to the
+            largest size seen.
 
         Raises:
             ValueError: If the tensors do not all have the same rank.
         """
-        if not tensors or tensors[0].dim() < 2:
-            return tensors
-
         ndim = tensors[0].dim()
         if any(t.dim() != ndim for t in tensors):
             ranks = sorted({t.dim() for t in tensors})
             raise ValueError(
-                f"Cannot pad tensors of differing rank for concatenation: got "
-                f"ranks {ranks}. This usually means a worker returned an "
-                f"unexpected shape."
+                f"Cannot combine tensors of differing rank: got ranks {ranks}. "
+                f"This usually means a worker returned an unexpected shape."
+            )
+        if ndim == 0:
+            raise ValueError("Cannot combine zero-dimensional tensors.")
+
+        total = sum(t.shape[0] for t in tensors)
+        trailing = [max(t.shape[d] for t in tensors) for d in range(1, ndim)]
+        out = torch.empty((total, *trailing), dtype=tensors[0].dtype)
+
+        # Move to a deque and empty the caller's list, so each batch has exactly
+        # one reference left and popping it is enough to free it. Holding them
+        # in the original list until the end would keep every input alive
+        # alongside the output, which is the peak this method avoids.
+        pending = deque(tensors)
+        tensors.clear()
+
+        row = 0
+        while pending:
+            tensor = pending.popleft()
+            rows = tensor.shape[0]
+
+            if any(tensor.shape[d] != trailing[d - 1] for d in range(1, ndim)):
+                out[row : row + rows].zero_()
+            out[(slice(row, row + rows), *(slice(0, s) for s in tensor.shape[1:]))] = (
+                tensor
             )
 
-        max_sizes = [max(t.shape[d] for t in tensors) for d in range(ndim)]
+            row += rows
+            del tensor
 
-        padded = []
-        for tensor in tensors:
-            # F.pad reads dimensions last-to-first, two entries (before, after)
-            # per dimension. Stopping at 1 leaves the batch axis unpadded.
-            pad_spec: list[int] = []
-            for dim in range(ndim - 1, 0, -1):
-                pad_spec.extend([0, max_sizes[dim] - tensor.shape[dim]])
-
-            if any(pad_spec):
-                tensor = torch.nn.functional.pad(tensor, pad_spec)
-            padded.append(tensor)
-
-        return padded
-
-    def _combine_tuple_results(self, results: list[tuple[Any, ...]]) -> tuple[Any, ...]:
-        """Combine tuple results element-wise."""
-        num_elements = len(results[0])
-        combined = []
-
-        for i in range(num_elements):
-            elements = [r[i] for r in results]
-            first_elem = elements[0]
-
-            if isinstance(first_elem, torch.Tensor):
-                # Pad tensors to max sequence length before concatenation
-                elements = self._pad_tensors_to_max_length(elements)
-                # Concatenate tensors along batch dimension
-                combined.append(torch.cat(elements, dim=0))
-
-            elif isinstance(first_elem, list):
-                # Flatten lists (for hidden states or offsets)
-                if first_elem and isinstance(first_elem[0], torch.Tensor):
-                    # List of tensors (hidden states per layer)
-                    num_layers = len(first_elem)
-                    layer_combined = []
-                    for layer_idx in range(num_layers):
-                        layer_tensors = [e[layer_idx] for e in elements]
-                        # Pad tensors to max sequence length before concatenation
-                        layer_tensors = self._pad_tensors_to_max_length(layer_tensors)
-                        layer_combined.append(torch.cat(layer_tensors, dim=0))
-                    combined.append(layer_combined)
-                else:
-                    # Regular list (offsets)
-                    flat = []
-                    for e in elements:
-                        flat.extend(e)
-                    combined.append(flat)
-
-            elif first_elem is None:
-                combined.append(None)
-
-            else:
-                # Unknown type
-                combined.append(elements)
-
-        return tuple(combined)
+        return out
 
     def _shutdown_workers_fast(self) -> None:
         """
